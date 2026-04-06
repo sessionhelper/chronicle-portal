@@ -31,17 +31,7 @@ export default function RootLayout({
       lang="en"
       className={`${crimsonPro.variable} ${inter.variable} h-full antialiased`}
     >
-      <body
-        className="min-h-full flex flex-col font-serif text-ink"
-        style={{
-          background: `
-            radial-gradient(ellipse at 20% 50%, rgba(212, 201, 181, 0.3) 0%, transparent 50%),
-            radial-gradient(ellipse at 80% 20%, rgba(212, 201, 181, 0.2) 0%, transparent 40%),
-            radial-gradient(ellipse at 50% 100%, rgba(232, 224, 208, 0.4) 0%, transparent 50%),
-            #f5f0e8
-          `,
-        }}
-      >
+      <body className="min-h-full flex flex-col font-serif text-ink bg-parchment">
         <TooltipProvider>{children}</TooltipProvider>
         <Toaster
           theme="light"
