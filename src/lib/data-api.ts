@@ -28,7 +28,7 @@ async function authenticate(): Promise<string> {
   }
 
   const data = await res.json();
-  cachedToken = data.token;
+  cachedToken = data.session_token;
   // Refresh 60s before the 90s reap timeout
   tokenExpiresAt = Date.now() + 30_000;
   return cachedToken!;

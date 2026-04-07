@@ -546,7 +546,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             >
               {sceneBreak && (
                 <div
-                  className="my-8 flex items-center gap-3 cursor-pointer group"
+                  className="my-8 flex items-center gap-3 group"
                   onClick={() => setSelection(
                     selection?.type === "scene" && selection.scene === thisScene
                       ? null
@@ -562,7 +562,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
               )}
 
               <div
-                className="relative cursor-pointer group"
+                className="relative group"
                 style={{ opacity: playing && isPast && !isActive ? 0.4 : 1, transition: "opacity 150ms" }}
               >
                 {/* Content -- click block-level */}
@@ -681,7 +681,7 @@ function SingleBlock({ block, isGM, onLineClick, selectedLine, hideGutter, playi
           return (
             <div className="flex items-center gap-1.5 -mb-0.5">
               <button
-                className={`transition-all duration-300 cursor-pointer hover:opacity-80 ${isBlockPlaying ? "speaker-glow" : ""}`}
+                className={`transition-all duration-300 hover:opacity-90 ${isBlockPlaying ? "speaker-glow" : ""}`}
                 style={{ color: isBlockPlaying ? accent : undefined }}
                 onClick={(e) => { e.stopPropagation(); onPlayClip?.(block.startTime); }}
                 title="Play clip"
@@ -826,7 +826,7 @@ function OverlapBlock({ block, playing, currentTime, onPlayClip }: { block: Bloc
                   return (
                     <div className="flex items-center gap-1.5 -mb-0.5">
                       <button
-                        className={`transition-all duration-300 cursor-pointer hover:opacity-80 ${isSpkPlaying ? "speaker-glow" : ""}`}
+                        className={`transition-all duration-300 hover:opacity-90 ${isSpkPlaying ? "speaker-glow" : ""}`}
                         style={{ color: isSpkPlaying ? accent : undefined }}
                         onClick={(e) => { e.stopPropagation(); onPlayClip?.(segs[0].start_time); }}
                         title="Play clip"

@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboardIcon,
   ListIcon,
-  SettingsIcon,
   MenuIcon,
   XIcon,
 } from "lucide-react";
@@ -15,7 +14,6 @@ import { useState } from "react";
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboardIcon },
   { href: "/sessions", label: "Sessions", icon: ListIcon },
-  { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
 export function Sidebar() {
