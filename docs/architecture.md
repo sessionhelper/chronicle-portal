@@ -96,7 +96,8 @@ session_participants (
   consented_at timestamptz,
   withdrawn_at timestamptz,
   mid_session_join bool,
-  data_license text DEFAULT 'open' -- open | rail | private
+  no_llm_training bool DEFAULT false,
+  no_public_release bool DEFAULT false
 )
 
 -- Transcription output (from streaming pipeline)
@@ -146,23 +147,24 @@ consent_audit_log (
 )
 ```
 
-## Three-Tier Data Licensing
+## Data Licensing
 
-Per-speaker per-session, orthogonal to recording consent:
+Two independent flags per speaker per session, orthogonal to recording consent:
 
-| Tier | `data_license` | Published? | LLM training? | License |
-|------|---------------|-----------|---------------|---------|
-| Full Open | `open` | Yes (`ovp-open`) | Yes | CC BY-SA 4.0 |
-| Research Only | `rail` | Yes (`ovp-rail`) | No | CC BY-SA 4.0 + RAIL addendum |
-| Private | `private` | No | No | Internal use only |
+| `no_llm_training` | `no_public_release` | Published? | LLM Training? | License |
+|---|---|---|---|---|
+| false | false | Yes (`ovp-open`) | Yes | CC BY-SA 4.0 |
+| true | false | Yes (`ovp-rail`) | No | CC BY-SA 4.0 + RAIL addendum |
+| false | true | No | Yes (internal only) | Internal use |
+| true | true | No | No | Fully restricted |
 
-Default: `open` (most permissive).
+Defaults: both false (fully open).
 
 **Bot consent flow:**
 1. Accept / Decline (gates recording — all must respond)
-2. Ephemeral follow-up after Accept: "No LLM Training" / "No Public Release" buttons (non-blocking, default open if ignored)
+2. Ephemeral follow-up after Accept: two independent toggle buttons "No LLM Training" / "No Public Release" (non-blocking, both default off if ignored)
 
-**Portal:** Users can change their license tier at any time on the session detail page.
+**Portal:** Users can toggle either flag independently at any time on the session detail page.
 
 ## Security
 
@@ -226,6 +228,14 @@ Default: `open` (most permissive).
 | POST | `/api/v1/segments/:id/edit` | Submit transcript correction |
 | POST | `/api/v1/segments/:id/flag` | Flag segment as private info |
 | DELETE | `/api/v1/segments/:id/flag` | Undo own flag |
+
+## Transcript Display: Speaker Lanes
+
+TTRPG sessions have constant crosstalk — multiple speakers talking simultaneously. Segments have per-speaker `start_time`/`end_time` ranges that overlap.
+
+The transcript viewer renders as **speaker lanes**: each speaker gets a horizontal lane, segments positioned at their time offset. Overlapping speech from different speakers is visually obvious. The audio playback cursor walks through all lanes simultaneously, highlighting the active segment(s) per speaker.
+
+This is distinct from a flat chat-log view — the lane layout preserves the temporal reality of who was talking when, and makes interruptions/reactions readable.
 
 ## Bot ↔ Database Integration
 

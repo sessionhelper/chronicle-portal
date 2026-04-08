@@ -1,65 +1,182 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { AppShell } from "@/components/layout/app-shell";
+import { Badge } from "@/components/ui/badge";
+import { formatDate, formatDuration } from "@/lib/format";
+import type { DataApiSession } from "@/lib/data-api";
+
+interface DashboardStats {
+  sessionCount: number;
+  totalDuration: number;
+  totalSegments: number;
+}
+
+function computeStats(sessions: DataApiSession[]): DashboardStats {
+  let totalDuration = 0;
+  let totalSegments = 0;
+  for (const s of sessions) {
+    if (s.ended_at) {
+      totalDuration +=
+        (new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) /
+        1000;
+    }
+    totalSegments += s.segment_count;
+  }
+  return { sessionCount: sessions.length, totalDuration, totalSegments };
+}
+
+export default function DashboardPage() {
+  const [sessions, setSessions] = useState<DataApiSession[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch("/api/sessions");
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        const data: DataApiSession[] = await res.json();
+        if (!cancelled) {
+          data.sort(
+            (a, b) =>
+              new Date(b.started_at).getTime() -
+              new Date(a.started_at).getTime()
+          );
+          setSessions(data);
+        }
+      } catch (e) {
+        if (!cancelled)
+          setError(e instanceof Error ? e.message : "Failed to load");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const stats = computeStats(sessions);
+  const recent = sessions.slice(0, 5);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <AppShell>
+      <h1 className="font-serif text-xl font-semibold text-ink">Dashboard</h1>
+
+      {/* Stats cards */}
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="rounded border border-rule bg-card-surface p-4">
+          <p className="font-sans text-xs text-ink-faint">Sessions</p>
+          <p className="mt-1 font-serif text-2xl font-semibold text-ink">
+            {loading ? "..." : stats.sessionCount}
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="rounded border border-rule bg-card-surface p-4">
+          <p className="font-sans text-xs text-ink-faint">Total duration</p>
+          <p className="mt-1 font-serif text-2xl font-semibold text-ink">
+            {loading ? "..." : formatDuration(stats.totalDuration)}
+          </p>
         </div>
-      </main>
-    </div>
+        <div className="rounded border border-rule bg-card-surface p-4">
+          <p className="font-sans text-xs text-ink-faint">Total segments</p>
+          <p className="mt-1 font-serif text-2xl font-semibold text-ink">
+            {loading ? "..." : stats.totalSegments.toLocaleString()}
+          </p>
+        </div>
+      </div>
+
+      {/* Error state */}
+      {error && (
+        <div className="mt-4 rounded border border-danger/20 bg-danger/5 px-4 py-3">
+          <p className="font-sans text-sm text-danger">{error}</p>
+        </div>
+      )}
+
+      {/* Recent sessions */}
+      <div className="mt-6">
+        <div className="flex items-baseline justify-between">
+          <h2 className="font-serif text-base font-semibold text-ink">
+            Recent sessions
+          </h2>
+          <Link
+            href="/sessions"
+            className="font-sans text-xs text-accent-brown hover:underline"
+          >
+            View all
+          </Link>
+        </div>
+
+        {loading ? (
+          <p className="mt-3 font-sans text-sm text-ink-faint">Loading...</p>
+        ) : recent.length === 0 ? (
+          <p className="mt-3 font-sans text-sm text-ink-light">
+            No sessions found. Sessions will appear once the data API has
+            processed recordings.
+          </p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-rule font-sans text-xs text-ink-faint">
+                  <th className="pb-2 pr-4 font-medium">Date</th>
+                  <th className="pb-2 pr-4 font-medium">Duration</th>
+                  <th className="pb-2 pr-4 font-medium text-center">
+                    Speakers
+                  </th>
+                  <th className="pb-2 pr-4 font-medium text-center">
+                    Segments
+                  </th>
+                  <th className="pb-2 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recent.map((session) => (
+                  <tr
+                    key={session.id}
+                    className="border-b border-rule/50 transition-colors duration-100 hover:bg-parchment-dark"
+                  >
+                    <td className="py-2.5 pr-4">
+                      <Link
+                        href={`/sessions/${session.id}`}
+                        className="font-sans text-sm text-accent-brown hover:underline"
+                      >
+                        {formatDate(session.started_at)}
+                      </Link>
+                    </td>
+                    <td className="py-2.5 pr-4 font-sans text-sm text-ink-light">
+                      {session.ended_at
+                        ? formatDuration(
+                            (new Date(session.ended_at).getTime() -
+                              new Date(session.started_at).getTime()) /
+                              1000
+                          )
+                        : "In progress"}
+                    </td>
+                    <td className="py-2.5 pr-4 text-center font-sans text-sm text-ink-light">
+                      {session.participant_count}
+                    </td>
+                    <td className="py-2.5 pr-4 text-center font-sans text-sm text-ink-light">
+                      {session.segment_count}
+                    </td>
+                    <td className="py-2.5">
+                      <Badge
+                        variant="secondary"
+                        className="font-sans text-[10px]"
+                      >
+                        {session.status}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </AppShell>
   );
 }
