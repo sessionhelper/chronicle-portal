@@ -346,8 +346,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   });
 
   const jumpTo = useCallback((time: number) => audio.seek(time), [audio]);
-  const playClip = useCallback((time: number) => {
-    audio.play(time);
+  const playClip = useCallback((startTime: number, endTime?: number) => {
+    if (endTime !== undefined) {
+      audio.playSegment(startTime, endTime);
+    } else {
+      // Fallback: play a 15s segment starting at startTime
+      audio.playSegment(startTime, startTime + 15);
+    }
   }, [audio]);
 
   const startEdit = useCallback((blockSegments: Segment[]) => {
@@ -415,6 +420,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const maxTime = Math.max(...data.segments.filter((s) => !s.excluded).map((s) => s.end_time));
   const speakerCount = Object.keys(speakerNameCache).length;
 
+  // Set session duration on the audio hook from segment metadata
+  useEffect(() => {
+    if (maxTime > 0) {
+      audio.setDuration(maxTime);
+    }
+  }, [maxTime, audio]);
+
   return (
     <AppShell>
       <style>{`
@@ -459,7 +471,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
         <PlaybackControls
           playing={playing}
           currentTime={currentTime}
-          duration={audio.duration || maxTime}
+          duration={maxTime}
           loading={audio.loading}
           error={audio.error}
           onTogglePlay={audio.togglePlay}
@@ -635,7 +647,7 @@ function SingleBlock({ block, isGM, onLineClick, selectedLine, hideGutter, playi
   hideGutter?: boolean;
   playing?: boolean;
   currentTime?: number;
-  onPlayClip?: (time: number) => void;
+  onPlayClip?: (startTime: number, endTime?: number) => void;
   isSelected?: boolean;
   editingSegId?: string | null;
   editText?: string;
@@ -675,7 +687,7 @@ function SingleBlock({ block, isGM, onLineClick, selectedLine, hideGutter, playi
               <button
                 className={`transition-all duration-300 hover:opacity-90 ${isBlockPlaying ? "speaker-glow" : ""}`}
                 style={{ color: isBlockPlaying ? accent : undefined }}
-                onClick={(e) => { e.stopPropagation(); onPlayClip?.(block.startTime); }}
+                onClick={(e) => { e.stopPropagation(); onPlayClip?.(block.startTime, block.endTime); }}
                 title="Play clip"
               >
                 <Volume2 size={11} className={isBlockPlaying ? "" : "text-ink-faint"} />
@@ -765,7 +777,7 @@ function SingleBlock({ block, isGM, onLineClick, selectedLine, hideGutter, playi
   );
 }
 
-function OverlapBlock({ block, playing, currentTime, onPlayClip }: { block: Block; playing?: boolean; currentTime?: number; onPlayClip?: (time: number) => void }) {
+function OverlapBlock({ block, playing, currentTime, onPlayClip }: { block: Block; playing?: boolean; currentTime?: number; onPlayClip?: (startTime: number, endTime?: number) => void }) {
   const bySpeaker: Record<string, Segment[]> = {};
   for (const seg of block.segments) {
     if (!bySpeaker[seg.speaker_pseudo_id]) {
@@ -820,7 +832,7 @@ function OverlapBlock({ block, playing, currentTime, onPlayClip }: { block: Bloc
                       <button
                         className={`transition-all duration-300 hover:opacity-90 ${isSpkPlaying ? "speaker-glow" : ""}`}
                         style={{ color: isSpkPlaying ? accent : undefined }}
-                        onClick={(e) => { e.stopPropagation(); onPlayClip?.(segs[0].start_time); }}
+                        onClick={(e) => { e.stopPropagation(); onPlayClip?.(segs[0].start_time, segs[segs.length - 1].end_time); }}
                         title="Play clip"
                       >
                         <Volume2 size={11} className={isSpkPlaying ? "" : "text-ink-faint"} />

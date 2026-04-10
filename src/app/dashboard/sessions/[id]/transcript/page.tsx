@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, use } from "react";
+import { useCallback, useEffect, useState, useMemo, use } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api-client";
 import { formatDate, formatDuration } from "@/lib/format";
@@ -76,14 +76,20 @@ export default function TranscriptPage({
     }
   }
 
-  function durationSeconds(): number {
+  const durationSeconds = useCallback((): number => {
     if (!session?.ended_at) return 0;
     return (
       (new Date(session.ended_at).getTime() -
         new Date(session.started_at).getTime()) /
       1000
     );
-  }
+  }, [session]);
+
+  // Set session duration on the audio hook from session metadata
+  useEffect(() => {
+    const dur = durationSeconds();
+    if (dur > 0) audio.setDuration(dur);
+  }, [durationSeconds, audio]);
 
   if (loading || sessionLoading) {
     return (
@@ -123,7 +129,7 @@ export default function TranscriptPage({
       <PlaybackControls
         playing={audio.playing}
         currentTime={audio.currentTime}
-        duration={audio.duration || durationSeconds()}
+        duration={durationSeconds() || audio.duration}
         loading={audio.loading}
         error={audio.error}
         onTogglePlay={audio.togglePlay}
@@ -136,8 +142,8 @@ export default function TranscriptPage({
         <TranscriptList
           segments={segments}
           playingSegId={playingSegId}
-          onPlayClip={(seg: TranscriptSegment) => audio.play(seg.start_time)}
-          onPlayFrom={(startTime) => audio.play(startTime)}
+          onPlayClip={(seg: TranscriptSegment) => audio.playSegment(seg.start_time, seg.end_time)}
+          onPlayFrom={(startTime) => audio.playFrom(startTime)}
           onFlag={handleFlag}
           onUnflag={handleUnflag}
           onEdit={handleEdit}

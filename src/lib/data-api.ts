@@ -192,6 +192,22 @@ export const dataApi = {
     request<DataApiScene[]>(`/internal/sessions/${id}/scenes`),
 
   /**
+   * Fetch pre-mixed audio for a time range from the data-api.
+   * Returns compressed OGG/Opus (~20KB for 15s) or WAV fallback.
+   */
+  getMixedAudio: async (
+    sessionId: string,
+    start: number,
+    end: number,
+    format: string = "opus"
+  ): Promise<ArrayBuffer> => {
+    const res = await requestRaw(
+      `/internal/sessions/${sessionId}/audio/mixed?start=${start}&end=${end}&format=${format}`
+    );
+    return res.arrayBuffer();
+  },
+
+  /**
    * Fetch a single raw PCM audio chunk for a speaker.
    * Returns the Response so it can be streamed/buffered.
    */
@@ -202,7 +218,6 @@ export const dataApi = {
 
   /**
    * Get the list of participants (with pseudo_ids) for building audio URLs.
-   * Re-export for convenience in audio routes.
    */
   getParticipantsForAudio: (id: string) =>
     request<DataApiParticipant[]>(`/internal/sessions/${id}/participants`),

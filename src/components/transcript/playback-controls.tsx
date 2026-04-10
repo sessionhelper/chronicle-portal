@@ -5,6 +5,7 @@ import { PauseIcon, PlayIcon, SquareIcon, Loader2Icon } from "lucide-react";
 interface PlaybackControlsProps {
   playing: boolean;
   currentTime: number;
+  /** Total session duration from metadata — not the audio element's duration */
   duration: number;
   loading: boolean;
   error: string | null;
@@ -69,7 +70,7 @@ export function PlaybackControls({
         </button>
       )}
 
-      {/* Seek bar */}
+      {/* Seek bar — maps to the full session duration */}
       <input
         type="range"
         min={0}
