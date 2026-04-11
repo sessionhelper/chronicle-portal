@@ -13,7 +13,7 @@ directly.
 The frontend is a Next.js 15 / React 19 app that runs its own BFF layer
 in `src/app/api/*`. The BFF talks directly to `chronicle-data-api` using the
 shared-secret auth protocol — there is no separate Axum public API in
-front of it today. The legacy `chronicle-api` repo exists but is not wired in.
+front of it.
 
 ## Service architecture
 
@@ -48,11 +48,10 @@ routes, which in turn use `src/lib/data-api.ts` to talk to the data-api.
 
 ## Key design decisions
 
-- **BFF-only — no separate public API.** `chronicle-api` is dormant for the
-  portal use case. Everything the frontend needs is exposed under
-  `/api/*` in the Next.js app, and the BFF forwards to the internal
-  data-api. This keeps a single source of truth for authorization and
-  avoids maintaining a separate Rust gateway.
+- **BFF-only — no separate public API.** Everything the frontend needs
+  is exposed under `/api/*` in the Next.js app, and the BFF forwards to
+  the internal data-api. This keeps a single source of truth for
+  authorization and avoids maintaining a separate Rust gateway.
 - **Real-time via SSE bridge to WebSocket.** `src/app/api/events/route.ts`
   opens a WebSocket to the data-api event bus, subscribes to the
   requested session's topic, and forwards events to the browser as

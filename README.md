@@ -17,8 +17,8 @@ rights before segments enter the dataset candidate set.
 - **Discord OAuth** for player login (no other auth method)
 - **BFF pattern**: `src/app/api/*` routes run server-side in Next and
   call `chronicle-data-api` directly using the shared-secret service
-  auth. There is no separate Rust public API in front — `chronicle-api`
-  exists but is dormant.
+  auth. There is no separate Rust public API in front — the portal is
+  the only thing that talks to the data-api on the user path.
 - **SSE bridge**: BFF routes subscribe to the data-api WebSocket and
   fan out events to connected browser clients over Server-Sent Events
 - **Windowed audio playback**: audio is never bulk-downloaded. The
