@@ -15,7 +15,6 @@ export interface SessionListItem {
   participant_count: number;
   status: string;
   consent_scope: string | null;
-  data_license: "open" | "rail" | "private";
 }
 
 export interface SessionDetail {
@@ -30,8 +29,30 @@ export interface SessionDetail {
   consent_scope: string | null;
   consented_at: string | null;
   withdrawn_at: string | null;
-  data_license: "open" | "rail" | "private";
   has_transcript: boolean;
+}
+
+/**
+ * A participant row joined with the current user's identity. Used by the
+ * session detail page to render "my" license toggles. Flags are the two
+ * independent booleans stored per participant in chronicle-data-api.
+ */
+export interface MyParticipant {
+  id: string;
+  session_id: string;
+  user_pseudo_id: string | null;
+  no_llm_training: boolean;
+  no_public_release: boolean;
+}
+
+/**
+ * Partial update shape for the license flags. Either flag can be
+ * toggled independently; omitted fields are unchanged server-side via
+ * COALESCE in the data-api route.
+ */
+export interface LicenseFlagUpdate {
+  no_llm_training?: boolean;
+  no_public_release?: boolean;
 }
 
 export interface TranscriptSegment {

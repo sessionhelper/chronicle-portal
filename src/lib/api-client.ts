@@ -39,10 +39,19 @@ export const api = {
       request<void>(`/sessions/${id}/consent/withdraw`, { method: "POST" }),
     reinstate: (id: string) =>
       request<void>(`/sessions/${id}/consent/reinstate`, { method: "POST" }),
-    updateLicense: (id: string, license: "open" | "rail" | "private") =>
+    /**
+     * Update the logged-in user's license flags for this session.
+     * Either flag can be omitted for a partial update. The BFF resolves
+     * which participant row belongs to the current user and PATCHes the
+     * data-api's /internal/participants/{id}/license endpoint.
+     */
+    updateLicense: (
+      id: string,
+      flags: { no_llm_training?: boolean; no_public_release?: boolean }
+    ) =>
       request<void>(`/sessions/${id}/license`, {
         method: "PATCH",
-        body: JSON.stringify({ license }),
+        body: JSON.stringify(flags),
       }),
     updateCollaborativeEditing: (id: string, enabled: boolean) =>
       request<void>(`/sessions/${id}`, {
