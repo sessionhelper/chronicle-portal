@@ -1,5 +1,5 @@
 /**
- * Server-side client for the internal data API (ovp-data-api).
+ * Server-side client for the internal data API (chronicle-data-api).
  *
  * Authenticates with a shared secret, caches the bearer token,
  * and auto-refreshes on 401. Intended for use in Next.js API routes
@@ -19,7 +19,7 @@ async function authenticate(): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       shared_secret: SHARED_SECRET,
-      service_name: "ttrpg-collector-frontend",
+      service_name: "chronicle-portal",
     }),
   });
 
