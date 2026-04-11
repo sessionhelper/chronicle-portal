@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useCallback, useEffect, useState, useMemo, use } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api-client";
 import { formatDate, formatDuration } from "@/lib/format";
@@ -8,7 +8,7 @@ import { useTranscript } from "@/hooks/use-transcript";
 import { useAudioPlayback } from "@/hooks/use-audio-playback";
 import { PlaybackControls } from "@/components/transcript/playback-controls";
 import { TranscriptList } from "@/components/transcript/transcript-list";
-import type { SessionDetail } from "@/lib/types";
+import type { SessionDetail, TranscriptSegment } from "@/lib/types";
 
 export default function TranscriptPage({
   params,
@@ -21,8 +21,15 @@ export default function TranscriptPage({
 
   const { segments, loading, error, flagSegment, unflagSegment, editSegment } =
     useTranscript(id);
-  const { playingSegId, sessionPlaying, playClip, playSession, stopAll } =
-    useAudioPlayback(id, segments);
+  const audio = useAudioPlayback(id);
+
+  // Derive which segment is playing based on currentTime
+  const playingSegId = useMemo(() => {
+    if (!audio.playing) return null;
+    const t = audio.currentTime;
+    const seg = segments.find((s) => t >= s.start_time && t < s.end_time);
+    return seg?.id ?? null;
+  }, [audio.playing, audio.currentTime, segments]);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,14 +76,20 @@ export default function TranscriptPage({
     }
   }
 
-  function durationSeconds(): number {
+  const durationSeconds = useCallback((): number => {
     if (!session?.ended_at) return 0;
     return (
       (new Date(session.ended_at).getTime() -
         new Date(session.started_at).getTime()) /
       1000
     );
-  }
+  }, [session]);
+
+  // Set session duration on the audio hook from session metadata
+  useEffect(() => {
+    const dur = durationSeconds();
+    if (dur > 0) audio.setDuration(dur);
+  }, [durationSeconds, audio]);
 
   if (loading || sessionLoading) {
     return (
@@ -114,9 +127,14 @@ export default function TranscriptPage({
 
       {/* Playback controls */}
       <PlaybackControls
-        sessionPlaying={sessionPlaying}
-        onPlay={() => playSession()}
-        onStop={stopAll}
+        playing={audio.playing}
+        currentTime={audio.currentTime}
+        duration={durationSeconds() || audio.duration}
+        loading={audio.loading}
+        error={audio.error}
+        onTogglePlay={audio.togglePlay}
+        onStop={audio.stop}
+        onSeek={audio.seek}
       />
 
       {/* Transcript */}
@@ -124,8 +142,8 @@ export default function TranscriptPage({
         <TranscriptList
           segments={segments}
           playingSegId={playingSegId}
-          onPlayClip={playClip}
-          onPlayFrom={(startTime) => playSession(startTime)}
+          onPlayClip={(seg: TranscriptSegment) => audio.playSegment(seg.start_time, seg.end_time)}
+          onPlayFrom={(startTime) => audio.playFrom(startTime)}
           onFlag={handleFlag}
           onUnflag={handleUnflag}
           onEdit={handleEdit}

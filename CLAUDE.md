@@ -1,4 +1,4 @@
-# ttrpg-collector-frontend
+# chronicle-portal
 
 > Org-wide conventions live in `/home/alex/sessionhelper-hub/CLAUDE.md`. The full **Parchment design system** + **Uncodixfy UI rules** live in `/home/alex/sessionhelper-hub/design/uncodixfy-ui.md` — read that before any UI work.
 

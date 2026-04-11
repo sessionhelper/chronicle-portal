@@ -3,6 +3,8 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { Ghost, Flag, Pencil, UserRoundX, Volume2, User, ChevronLeft } from "lucide-react";
 import { useSessionEvents } from "@/hooks/use-session-events";
+import { useAudioPlayback } from "@/hooks/use-audio-playback";
+import { PlaybackControls } from "@/components/transcript/playback-controls";
 import { AppShell } from "@/components/layout/app-shell";
 import Link from "next/link";
 
@@ -54,16 +56,51 @@ interface Block {
   columnSpeakers: [string, string] | null;
 }
 
+// Speaker display metadata from session_participants. Keyed by pseudo_id
+// (which matches Segment.speaker_pseudo_id). Populated by fetching
+// /api/sessions/[id]/participants.
+interface ParticipantMeta {
+  display_name: string | null;
+  character_name: string | null;
+}
+
 // Speaker names and colors are derived dynamically from the data.
 // No hardcoded IDs — works with any session's participants.
 const speakerNameCache: Record<string, string> = {};
 const speakerAccentCache: Record<string, { light: string; dark: string }> = {};
+let participantMetaCache: Record<string, ParticipantMeta> = {};
 let gmId = "";
 
 // Accent hues: warm brown (GM), blue, green, purple, red, gold
 const ACCENT_HUES = [30, 210, 140, 270, 350, 50];
 
-function initSpeakers(segments: Segment[]) {
+// Format display name for a speaker given their participant metadata.
+// - "Character Name (Discord Name)" if both are set
+// - "Discord Name" if only display_name is set
+// - fallback to the pseudo_id (truncated) otherwise
+function formatSpeakerLabel(
+  pseudoId: string,
+  meta: ParticipantMeta | undefined,
+): string {
+  if (meta?.character_name && meta.display_name) {
+    return `${meta.character_name} (${meta.display_name})`;
+  }
+  if (meta?.character_name) return meta.character_name;
+  if (meta?.display_name) return meta.display_name;
+  // Fallback: cleaned-up pseudo_id
+  return pseudoId.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function initSpeakers(
+  segments: Segment[],
+  metaByPseudoId: Record<string, ParticipantMeta> = {},
+) {
+  // Rebuild from scratch so stale entries from a previous session don't
+  // leak through when navigating between sessions.
+  for (const k of Object.keys(speakerNameCache)) delete speakerNameCache[k];
+  for (const k of Object.keys(speakerAccentCache)) delete speakerAccentCache[k];
+  participantMetaCache = metaByPseudoId;
+
   const seen: string[] = [];
   for (const s of segments) {
     if (!seen.includes(s.speaker_pseudo_id)) seen.push(s.speaker_pseudo_id);
@@ -76,8 +113,7 @@ function initSpeakers(segments: Segment[]) {
 
   for (let i = 0; i < seen.length; i++) {
     const id = seen[i];
-    // Use pseudo_id as display name, cleaned up
-    speakerNameCache[id] = id.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    speakerNameCache[id] = formatSpeakerLabel(id, metaByPseudoId[id]);
     const hue = ACCENT_HUES[i % ACCENT_HUES.length];
     speakerAccentCache[id] = {
       light: `hsl(${hue}, 55%, 35%)`,
@@ -250,11 +286,26 @@ function buildBlocks(segments: Segment[]): Block[] {
   return blocks;
 }
 
+interface SessionMeta {
+  id: string;
+  title: string | null;
+}
+
+interface ParticipantRow {
+  id: string;
+  session_id: string;
+  user_pseudo_id: string | null;
+  display_name: string | null;
+  character_name: string | null;
+}
+
 export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = React.use(params);
   const [data, setData] = useState<PipelineResult | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [playing, setPlaying] = useState(false);
+  const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null);
+  const [participantWarning, setParticipantWarning] = useState<string | null>(null);
+  const audio = useAudioPlayback(sessionId);
+  const { playing, currentTime } = audio;
   const [selectedScene, setSelectedScene] = useState<number | null>(null);
   const [selection, setSelection] = useState<{ type: "line" | "block" | "scene"; blockIdx: number; segIdx?: number; scene?: number } | null>(null);
   const [flashingBlock, setFlashingBlock] = useState<number | null>(null);
@@ -263,7 +314,6 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [editText, setEditText] = useState("");
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastActiveBlock = useRef<number | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const blockRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   // Real-time event subscription: append new segments as the worker
@@ -302,28 +352,68 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   });
 
   useEffect(() => {
-    fetch(`/api/sessions/${sessionId}/segments`)
-      .then((r) => r.json())
-      .then((segments: Segment[]) => {
-        // Wrap in PipelineResult shape
+    // Fetch segments, session detail, and participants in parallel so we
+    // can initialise speakers with display_name/character_name in a single
+    // pass. If participant metadata fails to load we still render the
+    // transcript with pseudo_id fallbacks (with a non-blocking warning).
+    let cancelled = false;
+    const segmentsReq = fetch(`/api/sessions/${sessionId}/segments`).then(
+      (r) => r.json() as Promise<Segment[]>,
+    );
+    const sessionReq = fetch(`/api/sessions/${sessionId}`)
+      .then((r) => (r.ok ? (r.json() as Promise<SessionMeta>) : null))
+      .catch(() => null);
+    const participantsReq = fetch(
+      `/api/sessions/${sessionId}/participants`,
+    )
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<ParticipantRow[]>;
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setParticipantWarning(
+            e instanceof Error ? e.message : "failed to load participants",
+          );
+        }
+        return [] as ParticipantRow[];
+      });
+
+    Promise.all([segmentsReq, sessionReq, participantsReq]).then(
+      ([segments, session, participants]) => {
+        if (cancelled) return;
+
+        // Build pseudo_id -> metadata map. The backend returns
+        // `user_pseudo_id` on ParticipantWithUser, which matches the
+        // `speaker_pseudo_id` on segments.
+        const metaByPseudoId: Record<string, ParticipantMeta> = {};
+        for (const p of participants) {
+          if (p.user_pseudo_id) {
+            metaByPseudoId[p.user_pseudo_id] = {
+              display_name: p.display_name,
+              character_name: p.character_name,
+            };
+          }
+        }
+
         const sorted = segments.sort((a, b) => a.start_time - b.start_time);
-        initSpeakers(sorted);
+        initSpeakers(sorted, metaByPseudoId);
+        setSessionMeta(session);
         setData({
           segments: sorted,
-          segments_produced: segments.filter(s => !s.excluded).length,
-          segments_excluded: segments.filter(s => s.excluded).length,
+          segments_produced: segments.filter((s) => !s.excluded).length,
+          segments_excluded: segments.filter((s) => s.excluded).length,
           scenes_detected: 0,
-          duration_processed: segments.length > 0 ? segments[segments.length - 1].end_time : 0,
+          duration_processed:
+            segments.length > 0 ? segments[segments.length - 1].end_time : 0,
         });
-      });
-  }, [sessionId]);
+      },
+    );
 
-  useEffect(() => {
-    if (playing) {
-      timerRef.current = setInterval(() => setCurrentTime((prev) => prev + 0.1), 100);
-    } else if (timerRef.current) { clearInterval(timerRef.current); }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [playing]);
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
 
   // Flash on block transition + scroll when active block leaves viewport
   useEffect(() => {
@@ -351,11 +441,15 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     }
   });
 
-  const jumpTo = useCallback((time: number) => setCurrentTime(time), []);
-  const playClip = useCallback((time: number) => {
-    setCurrentTime(time);
-    setPlaying(true);
-  }, []);
+  const jumpTo = useCallback((time: number) => audio.seek(time), [audio]);
+  const playClip = useCallback((startTime: number, endTime?: number) => {
+    if (endTime !== undefined) {
+      audio.playSegment(startTime, endTime);
+    } else {
+      // Fallback: play a 15s segment starting at startTime
+      audio.playSegment(startTime, startTime + 15);
+    }
+  }, [audio]);
 
   const startEdit = useCallback((blockSegments: Segment[]) => {
     setEditingSegId(blockSegments[0].id);
@@ -412,6 +506,18 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
 
   const blocks = useMemo(() => buildBlocks(filteredSegments), [filteredSegments]);
 
+  const maxTime = data
+    ? Math.max(...data.segments.filter((s) => !s.excluded).map((s) => s.end_time), 0)
+    : 0;
+
+  // Set session duration on the audio hook from segment metadata.
+  // Must be before the early return to keep hook order stable.
+  useEffect(() => {
+    if (maxTime > 0) {
+      audio.setDuration(maxTime);
+    }
+  }, [maxTime, audio]);
+
   if (!data) return (
     <AppShell>
       <div className="flex items-center justify-center h-64 font-sans text-ink-faint">Loading...</div>
@@ -419,7 +525,6 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   );
 
   const scenes = [...new Set(data.segments.filter((s) => !s.excluded).map((s) => s.chunk_group ?? 0))].sort((a, b) => a - b);
-  const maxTime = Math.max(...data.segments.filter((s) => !s.excluded).map((s) => s.end_time));
   const speakerCount = Object.keys(speakerNameCache).length;
 
   return (
@@ -452,51 +557,58 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       {/* Session info header */}
       <div className="mb-4">
         <h1 className="font-serif text-xl font-semibold text-ink">
-          Session {sessionId.substring(0, 8)}
+          {sessionMeta?.title
+            ? sessionMeta.title
+            : `Session ${sessionId.substring(0, 8)}`}
         </h1>
         <p className="font-sans text-sm text-ink-light mt-0.5">
           {speakerCount} speaker{speakerCount !== 1 ? "s" : ""}
           {data.duration_processed > 0 && <> &middot; {formatTime(data.duration_processed)}</>}
           {data.segments_produced > 0 && <> &middot; {data.segments_produced} segments</>}
         </p>
+        {participantWarning && (
+          <p className="font-sans text-xs text-amber-600 mt-1">
+            Could not load participant names ({participantWarning}); showing
+            speaker IDs.
+          </p>
+        )}
       </div>
 
       {/* Control strip: playback + scene filter */}
       <div className="border border-rule rounded bg-card-surface px-4 py-2.5 mb-6">
-        <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={() => setPlaying(!playing)}
-            className="px-3 py-1 rounded font-sans text-sm bg-accent-brown text-card-surface hover:bg-accent-light transition-colors">
-            {playing ? "Pause" : "Play"}
-          </button>
-          <input type="range" min={0} max={maxTime} step={0.1} value={currentTime}
-            onChange={(e) => setCurrentTime(parseFloat(e.target.value))}
-            className="flex-1 min-w-[120px] accent-[#8b4513]" />
-          <span className="font-mono text-xs text-ink-faint">{formatTime(currentTime)}</span>
-          {scenes.length > 1 && (
-            <>
-              <div className="w-px h-5 bg-rule mx-1" />
-              <span className="font-sans text-xs text-ink-faint">Scene:</span>
-              <div className="flex gap-1 flex-wrap">
-                <button onClick={() => setSelectedScene(null)}
+        <PlaybackControls
+          playing={playing}
+          currentTime={currentTime}
+          duration={maxTime}
+          loading={audio.loading}
+          error={audio.error}
+          onTogglePlay={audio.togglePlay}
+          onStop={audio.stop}
+          onSeek={audio.seek}
+        />
+        {scenes.length > 1 && (
+          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-rule flex-wrap">
+            <span className="font-sans text-xs text-ink-faint">Scene:</span>
+            <div className="flex gap-1 flex-wrap">
+              <button onClick={() => setSelectedScene(null)}
+                className={`px-2 py-0.5 rounded font-sans text-xs border transition-colors ${
+                  selectedScene === null
+                    ? "bg-accent-brown text-card-surface border-accent-brown"
+                    : "bg-transparent text-ink-faint border-rule hover:border-ink-faint"
+                }`}>All</button>
+              {scenes.map((s) => (
+                <button key={s} onClick={() => setSelectedScene(s)}
                   className={`px-2 py-0.5 rounded font-sans text-xs border transition-colors ${
-                    selectedScene === null
+                    selectedScene === s
                       ? "bg-accent-brown text-card-surface border-accent-brown"
                       : "bg-transparent text-ink-faint border-rule hover:border-ink-faint"
-                  }`}>All</button>
-                {scenes.map((s) => (
-                  <button key={s} onClick={() => setSelectedScene(s)}
-                    className={`px-2 py-0.5 rounded font-sans text-xs border transition-colors ${
-                      selectedScene === s
-                        ? "bg-accent-brown text-card-surface border-accent-brown"
-                        : "bg-transparent text-ink-faint border-rule hover:border-ink-faint"
-                    }`}>
-                    {s + 1}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+                  }`}>
+                  {s + 1}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Transcript area */}
@@ -643,7 +755,7 @@ function SingleBlock({ block, isGM, onLineClick, selectedLine, hideGutter, playi
   hideGutter?: boolean;
   playing?: boolean;
   currentTime?: number;
-  onPlayClip?: (time: number) => void;
+  onPlayClip?: (startTime: number, endTime?: number) => void;
   isSelected?: boolean;
   editingSegId?: string | null;
   editText?: string;
@@ -683,7 +795,7 @@ function SingleBlock({ block, isGM, onLineClick, selectedLine, hideGutter, playi
               <button
                 className={`transition-all duration-300 hover:opacity-90 ${isBlockPlaying ? "speaker-glow" : ""}`}
                 style={{ color: isBlockPlaying ? accent : undefined }}
-                onClick={(e) => { e.stopPropagation(); onPlayClip?.(block.startTime); }}
+                onClick={(e) => { e.stopPropagation(); onPlayClip?.(block.startTime, block.endTime); }}
                 title="Play clip"
               >
                 <Volume2 size={11} className={isBlockPlaying ? "" : "text-ink-faint"} />
@@ -773,7 +885,7 @@ function SingleBlock({ block, isGM, onLineClick, selectedLine, hideGutter, playi
   );
 }
 
-function OverlapBlock({ block, playing, currentTime, onPlayClip }: { block: Block; playing?: boolean; currentTime?: number; onPlayClip?: (time: number) => void }) {
+function OverlapBlock({ block, playing, currentTime, onPlayClip }: { block: Block; playing?: boolean; currentTime?: number; onPlayClip?: (startTime: number, endTime?: number) => void }) {
   const bySpeaker: Record<string, Segment[]> = {};
   for (const seg of block.segments) {
     if (!bySpeaker[seg.speaker_pseudo_id]) {
@@ -828,7 +940,7 @@ function OverlapBlock({ block, playing, currentTime, onPlayClip }: { block: Bloc
                       <button
                         className={`transition-all duration-300 hover:opacity-90 ${isSpkPlaying ? "speaker-glow" : ""}`}
                         style={{ color: isSpkPlaying ? accent : undefined }}
-                        onClick={(e) => { e.stopPropagation(); onPlayClip?.(segs[0].start_time); }}
+                        onClick={(e) => { e.stopPropagation(); onPlayClip?.(segs[0].start_time, segs[segs.length - 1].end_time); }}
                         title="Play clip"
                       >
                         <Volume2 size={11} className={isSpkPlaying ? "" : "text-ink-faint"} />

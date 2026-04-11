@@ -1,263 +1,236 @@
 # Architecture
 
-## System Overview
+## System overview
 
-The TTRPG Collector (Open Voice Project) is a participant portal where people whose voice was recorded in TTRPG sessions can manage consent, review transcripts, flag private information, and correct ASR output. Transcript corrections produce free training data as `(audio, machine_text, human_text)` triples.
+The TTRPG Collector frontend is the participant portal and transcript
+viewer for the Open Voice Project. Participants can log in, browse their
+sessions, watch transcripts arrive in real time as the worker transcribes
+them, play back mixed audio for any time range, and (eventually) correct
+or flag segments.
 
-## Service Architecture
+The frontend is a Next.js 15 / React 19 app that runs its own BFF layer
+in `src/app/api/*`. The BFF talks directly to `chronicle-data-api` using the
+shared-secret auth protocol — there is no separate Axum public API in
+front of it today. The legacy `chronicle-api` repo exists but is not wired in.
+
+## Service architecture
 
 ```
-                                Internet
-                                   │
-                               ┌───┴───┐
-                               │ Caddy  │  ← auto TLS via Let's Encrypt
-                               └───┬───┘
-                          ┌────────┴────────┐
-                          │                  │
-                     /api/*             everything else
-                          │                  │
-                 ┌────────┴───┐    ┌─────────┴──────┐
-                 │ Rust API   │    │ Next.js         │
-                 │ (Axum)     │    │ :3000           │
-                 │ :8000      │    └────────────────┘
-                 └────────┬───┘
+                       Browser
                           │
-Discord Bot (Songbird) ──┼──→ Postgres
-                          │
-                          └──→ S3 (FLAC + JSON)
+                          │  HTTPS
+                          ▼
+             ┌──────────────────────────┐
+             │  Next.js 15 (App Router) │
+             │                          │
+             │  pages/components ──┐    │
+             │                     │    │
+             │  src/app/api/* ─────┼──► │  "BFF" — server-only
+             │  (server routes)    │    │  - authenticates to data-api
+             │                     │    │  - forwards / proxies
+             │                     │    │
+             │  src/lib/data-api.ts     │  Data API client (server)
+             │  src/lib/api-client.ts   │  Thin wrapper for browser code
+             └──────────────┬───────────┘
+                            │
+                            │ HTTP (Bearer, shared-secret-issued)
+                            │ WS  (SSE bridge — event fanout)
+                            ▼
+                      chronicle-data-api
+                      (127.0.0.1:8001)
 ```
 
-### Components
+The BFF is the only thing that holds the shared secret. Browser code
+never sees it — mutations and reads all go through `src/app/api/*`
+routes, which in turn use `src/lib/data-api.ts` to talk to the data-api.
 
-| Component | Technology | Role |
-|-----------|-----------|------|
-| **Reverse proxy** | Caddy | Auto Let's Encrypt TLS. Routes `/api/*` → Axum, everything else → Next.js |
-| **Frontend** | Next.js 15, React 19, TypeScript, Tailwind CSS 4, Shadcn/ui (Radix) | Participant portal — session list, transcript review, consent management |
-| **API** | Rust (Axum) | REST API for frontend. Auth, session queries, transcript serving, consent mutations, audio streaming |
-| **Discord bot** | Rust (Serenity + Songbird) | Records per-speaker audio from Discord voice channels with DAVE E2EE. Writes to Postgres + S3 |
-| **Database** | PostgreSQL | Source of truth for sessions, participants, consent, transcripts, flags, edits |
-| **Object storage** | S3-compatible (Hetzner) | Archival storage for FLAC audio + JSON metadata. Bot writes, API reads |
-| **Transcription** | Rust streaming pipeline (planned) | VAD → Whisper → hallucination filter → segments in Postgres |
+## Key design decisions
 
-### Key Design Decisions
+- **BFF-only — no separate public API.** `chronicle-api` is dormant for the
+  portal use case. Everything the frontend needs is exposed under
+  `/api/*` in the Next.js app, and the BFF forwards to the internal
+  data-api. This keeps a single source of truth for authorization and
+  avoids maintaining a separate Rust gateway.
+- **Real-time via SSE bridge to WebSocket.** `src/app/api/events/route.ts`
+  opens a WebSocket to the data-api event bus, subscribes to the
+  requested session's topic, and forwards events to the browser as
+  Server-Sent Events. SSE instead of WS for browser-side because the
+  browser only needs one-way push and SSE integrates more cleanly with
+  Next.js route handlers.
+- **Server-side audio mixing.** The old approach downloaded all
+  per-speaker PCM chunks to the browser and mixed in JavaScript; that
+  has been replaced by a BFF proxy to
+  `GET /internal/sessions/{id}/audio/mixed`, which mixes speakers on
+  the data-api side and returns a contiguous WAV (Opus encoding is a
+  planned fallback). The playback hook fetches small windows on demand.
+- **Chunk events are internal.** `chunk_uploaded` events flow through
+  the data-api event bus but the SSE bridge filters them out before
+  forwarding to the browser — only the worker needs them.
 
-- **Bot and API are separate binaries** sharing Postgres. Bot writes session/consent data. API reads it for the frontend and handles consent mutations.
-- **S3 is archival, Postgres is operational.** Bot writes to both. If Postgres is down, bot continues with S3 (backfillable). API reads from Postgres only.
-- **Frontend never sees pseudo_ids.** The API derives `is_own_line` and `can_edit` server-side per segment.
-- **No account creation for non-participants.** Discord OAuth succeeds but if the user has no `session_participants` rows, they see "No recorded sessions." Prevents account spam.
+## Tech stack
 
-## Authentication
+| Component | Technology |
+|-----------|-----------|
+| Framework | Next.js 15 (App Router) |
+| UI runtime | React 19, TypeScript 5 |
+| Styling | Tailwind CSS 4 |
+| Component primitives | Shadcn/ui (Radix UI) |
+| Server runtime | Node.js (for `ws` / `next` API routes) |
+| Data source | `chronicle-data-api` (Rust/Axum, HTTP + WS) |
 
-Discord OAuth2 with minimal `identify` scope (username + ID only).
+## Source layout
 
 ```
-User → "Sign in with Discord" → Discord OAuth → callback with code
-  → API exchanges code for Discord token → calls /users/@me → gets Discord user ID
-  → derives pseudo_id via SHA256(user_id) → finds/creates user in Postgres
-  → issues JWT in httpOnly cookie (24h expiry, Secure, SameSite=Lax)
+src/
+├── app/
+│   ├── layout.tsx               — Root layout
+│   ├── page.tsx                 — Marketing / landing
+│   ├── dashboard/
+│   │   ├── layout.tsx
+│   │   ├── page.tsx             — Session list
+│   │   └── sessions/[id]/
+│   │       ├── layout.tsx
+│   │       ├── page.tsx         — Session detail shell
+│   │       └── transcript/
+│   │           └── page.tsx     — Transcript + playback view
+│   ├── sessions/
+│   │   ├── page.tsx             — Session index (legacy/alt nav)
+│   │   └── [id]/page.tsx        — Session detail + transcript viewer
+│   └── api/                     — BFF server routes
+│       ├── health/route.ts
+│       ├── events/route.ts      — SSE bridge to data-api WS event bus
+│       └── sessions/
+│           ├── route.ts
+│           └── [id]/
+│               ├── route.ts             — Session metadata
+│               ├── segments/route.ts    — Transcript fetch
+│               ├── participants/route.ts
+│               ├── beats/route.ts
+│               ├── scenes/route.ts
+│               └── audio/route.ts       — Proxy to /audio/mixed
+├── components/
+│   ├── layout/
+│   │   ├── app-shell.tsx        — Sidebar + main content shell
+│   │   ├── sidebar.tsx
+│   │   ├── dashboard-shell.tsx
+│   │   └── nav.tsx
+│   ├── transcript/
+│   │   ├── transcript-list.tsx
+│   │   ├── segment-row.tsx
+│   │   ├── segment-editor.tsx
+│   │   ├── flagged-segment.tsx
+│   │   └── playback-controls.tsx
+│   └── ui/                      — Shadcn primitives
+├── hooks/
+│   ├── use-session-events.ts    — EventSource subscription helper
+│   ├── use-audio-playback.ts    — Windowed audio fetch + playback
+│   ├── use-transcript.ts
+│   ├── use-polling.ts
+│   └── use-auth.ts              — Auth stub (OAuth integration WIP)
+└── lib/
+    ├── data-api.ts              — Server-side data-api client (holds the secret)
+    ├── api-client.ts            — Browser-safe wrapper
+    ├── types.ts
+    ├── format.ts
+    └── utils.ts
 ```
 
-Pseudo_id derivation matches the bot's `pseudonymize()` function: `hex(SHA256(user_id.to_string())[0:8])` → 16 hex chars.
+## Real-time: SSE bridge to data-api event bus
 
-## Data Model
+`src/app/api/events/route.ts` opens an EventSource-compatible SSE stream
+that is backed by a server-side WebSocket connection to the data-api.
 
-```sql
--- Identity
-users (
-  id uuid PRIMARY KEY,
-  discord_id_hash text UNIQUE,     -- hashed, never plaintext
-  pseudo_id text UNIQUE,           -- SHA256-derived, matches bot output
-  global_opt_out bool DEFAULT false,
-  opt_out_at timestamptz,
-  created_at timestamptz
-)
+Flow per browser connection:
 
--- Sessions
-sessions (
-  id uuid PRIMARY KEY,             -- matches bot's session_id (UUID v4)
-  guild_id bigint,
-  started_at timestamptz,
-  ended_at timestamptz,
-  game_system text,
-  campaign_name text,
-  participant_count int,
-  s3_prefix text,                  -- e.g. "sessions/{guild_id}/{session_id}"
-  status text,                     -- awaiting_consent | recording | uploaded | transcribing | ready | published
-  collaborative_editing bool DEFAULT true,
-  created_at timestamptz
-)
-
--- Per-speaker per-session participation
-session_participants (
-  id uuid PRIMARY KEY,
-  session_id uuid REFERENCES sessions,
-  user_id uuid REFERENCES users,
-  consent_scope text,              -- full | decline_audio | decline
-  consented_at timestamptz,
-  withdrawn_at timestamptz,
-  mid_session_join bool,
-  no_llm_training bool DEFAULT false,
-  no_public_release bool DEFAULT false
-)
-
--- Transcription output (from streaming pipeline)
-transcript_segments (
-  id uuid PRIMARY KEY,
-  session_id uuid REFERENCES sessions,
-  segment_index int,
-  speaker_pseudo_id text,
-  start_time float,
-  end_time float,
-  text text,                       -- current (may be edited by participants)
-  original_text text,              -- immutable Whisper output
-  confidence float,
-  created_at timestamptz
-)
-
--- Participant flags on segments
-segment_flags (
-  id uuid PRIMARY KEY,
-  segment_id uuid REFERENCES transcript_segments,
-  flagged_by uuid REFERENCES users,
-  reason text,                     -- 'private_info'
-  flagged_at timestamptz,
-  reverted_at timestamptz
-)
-
--- Participant corrections (ASR training data)
-segment_edits (
-  id uuid PRIMARY KEY,
-  segment_id uuid REFERENCES transcript_segments,
-  edited_by uuid REFERENCES users,
-  original_text text,              -- Whisper output at time of edit
-  new_text text,                   -- human correction
-  edited_at timestamptz
-)
-
--- Audit trail for consent changes
-consent_audit_log (
-  id uuid PRIMARY KEY,
-  user_id uuid REFERENCES users,
-  session_id uuid,                 -- null for global actions
-  action text,                     -- grant | withdraw | global_opt_out | global_opt_in | license_change
-  previous_scope text,
-  new_scope text,
-  timestamp timestamptz,
-  ip_address inet
-)
+```
+EventSource("/api/events?session_id=<uuid>")
+        │
+        ▼
+src/app/api/events/route.ts
+  1. POST /internal/auth (shared secret)
+  2. Open ws://data-api/ws?token=<service_token>
+  3. Send {"subscribe": "sessions/<uuid>"}
+  4. Forward incoming events as SSE, EXCEPT:
+       - `chunk_uploaded` (internal only, dropped)
 ```
 
-## Data Licensing
+Events the browser may see:
 
-Two independent flags per speaker per session, orthogonal to recording consent:
+- `connected` — emitted by the BFF as soon as the WS is ready
+- `session_status_changed`
+- `segment_added`
+- `segments_batch_added`
+- `beat_detected`
+- `scene_detected`
+- `transcription_progress`
+- `disconnected` — upstream closed
+- `error` — upstream error
 
-| `no_llm_training` | `no_public_release` | Published? | LLM Training? | License |
-|---|---|---|---|---|
-| false | false | Yes (`ovp-open`) | Yes | CC BY-SA 4.0 |
-| true | false | Yes (`ovp-rail`) | No | CC BY-SA 4.0 + RAIL addendum |
-| false | true | No | Yes (internal only) | Internal use |
-| true | true | No | No | Fully restricted |
+The browser hooks in `use-session-events` consume these events and
+update React state so transcript rows appear as they are transcribed.
 
-Defaults: both false (fully open).
+## Audio playback
 
-**Bot consent flow:**
-1. Accept / Decline (gates recording — all must respond)
-2. Ephemeral follow-up after Accept: two independent toggle buttons "No LLM Training" / "No Public Release" (non-blocking, both default off if ignored)
+`src/hooks/use-audio-playback.ts` implements a windowed chunk-on-demand
+approach. The BFF route `src/app/api/sessions/[id]/audio/route.ts`
+proxies to `GET /internal/sessions/{id}/audio/mixed?start=X&end=Y&format=…`.
 
-**Portal:** Users can toggle either flag independently at any time on the session detail page.
+Three playback modes:
 
-## Security
+| Mode | Method | Behaviour |
+|------|--------|-----------|
+| Segment | `playSegment(start, end)` | Fetches the exact `[start, end]` window and plays just that range. Used when clicking a transcript line. |
+| Continuous | `playFrom(time)` | Fetches a `WINDOW_SIZE`-second window (default 30 s), starts playback, and pre-fetches the next window 5 seconds before the current one ends. |
+| Seek | `seek(time)` | If the target time is already covered by the current window, seeks within it. Otherwise computes the enclosing window, fetches it, and resumes playback there. |
 
-### Caddy (network edge)
-- Rate limiting: 60 req/min per IP on `/api/*`
+The data-api mixer currently returns WAV regardless of `format` (Opus
+encoding is a TODO on the data-api side). The hook keeps the `format=opus`
+request parameter so switching over is transparent when that lands.
 
-### Axum (application)
-- Auth required on all `/api/v1/*` except `/auth/discord/callback`
-- Per-user rate limiting (tower middleware, keyed on JWT user ID):
-  - General: 120 req/min
-  - Mutations (flag/edit): 30 req/min
-  - Export: 1 per hour
-  - Auth: 10 req/min per IP
-- Input validation: edit text ≤ 2000 chars, flag reason enum-only
-- CORS: frontend origin only
-- JWT: 24h expiry, httpOnly cookie
-- OAuth state parameter for CSRF prevention
+## Data model — what the frontend sees
 
-### Data level
-- Queries always scoped to user's pseudo_id (can only see own sessions)
-- Edit permission enforced server-side (own line OR collaborative_editing flag)
-- Audio endpoints verify requester is a session participant
-- Flagged segment text not returned to non-flaggers
+All reads go through the data-api via the BFF. The frontend doesn't
+own a database. Types in `src/lib/data-api.ts` and `src/lib/types.ts`
+mirror the data-api responses:
 
-## API Surface
+- **Session** — id, guild_id, started_at, ended_at, status, title,
+  participant_count, segment_count, etc.
+- **Participant (with user pseudo_id)** — id, session_id, user_pseudo_id,
+  display_name, character_name, consent_scope, license flags.
+  Display name and character name are supported on the data-api side
+  (`PATCH /internal/participants/{id}`) but are not yet surfaced in the
+  transcript viewer UI.
+- **Segment** — segment_index, speaker_pseudo_id, start_time, end_time,
+  text, original_text, confidence, chunk_group, excluded.
+- **Beat** / **Scene** — optional, produced by the LLM operators in the
+  pipeline.
 
-### Auth
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/v1/auth/discord/callback` | Exchange OAuth code → JWT cookie |
-| GET | `/api/v1/auth/me` | Current user info |
-| POST | `/api/v1/auth/logout` | Clear cookie |
-| POST | `/api/v1/auth/me/opt-out` | Global opt-out |
-| POST | `/api/v1/auth/me/opt-in` | Undo opt-out |
-| POST | `/api/v1/auth/me/export` | Request data export |
-| GET | `/api/v1/auth/me/export/:id/status` | Poll export job |
-| GET | `/api/v1/auth/me/export/:id/download` | Download export ZIP |
-| DELETE | `/api/v1/auth/me` | Delete account (GDPR erasure) |
-| GET | `/api/v1/auth/me/audit` | Consent audit log |
+## Auth status
 
-### Sessions
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/v1/sessions` | List user's sessions |
-| GET | `/api/v1/sessions/:id` | Session detail + consent info |
-| PATCH | `/api/v1/sessions/:id` | Update session settings (collaborative_editing) |
-| POST | `/api/v1/sessions/:id/consent/withdraw` | Withdraw consent (deletes audio) |
-| POST | `/api/v1/sessions/:id/consent/reinstate` | Reinstate consent |
-| PATCH | `/api/v1/sessions/:id/license` | Change data license tier |
+Discord OAuth is scaffolded in `src/hooks/use-auth.ts` and referenced in
+`sessionhelper-hub/docs/auth-proxy-plan.md`, but the current build runs
+without a login gate for the dev portal. The plan is to drop Auth.js v5
+into Next.js and let the BFF enforce per-user scoping on data-api calls.
+Until then the portal treats any reachable client as authorized, which
+is fine on the 127.0.0.1-only dev deployment.
 
-### Transcripts
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/v1/sessions/:id/transcript` | All segments with `is_own_line`, `can_edit` |
-| GET | `/api/v1/sessions/:id/audio/clip` | Stream audio clip (query: speaker, start, end) |
-| GET | `/api/v1/sessions/:id/audio/combined` | Stream combined session audio |
+## Transcript display: speaker lanes
 
-### Segments
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/api/v1/segments/:id/edit` | Submit transcript correction |
-| POST | `/api/v1/segments/:id/flag` | Flag segment as private info |
-| DELETE | `/api/v1/segments/:id/flag` | Undo own flag |
+TTRPG sessions have constant crosstalk — multiple speakers talking
+simultaneously. Segments have per-speaker `start_time` / `end_time`
+ranges that overlap.
 
-## Transcript Display: Speaker Lanes
+The transcript viewer renders as **speaker lanes**: overlapping segments
+are laid out in side-by-side columns so interruptions and reactions are
+visually obvious. The audio playback cursor walks through all lanes
+simultaneously, highlighting the active segment(s) per speaker. This is
+distinct from a flat chat-log view — the lane layout preserves the
+temporal reality of who was talking when.
 
-TTRPG sessions have constant crosstalk — multiple speakers talking simultaneously. Segments have per-speaker `start_time`/`end_time` ranges that overlap.
+## Deployment
 
-The transcript viewer renders as **speaker lanes**: each speaker gets a horizontal lane, segments positioned at their time offset. Overlapping speech from different speakers is visually obvious. The audio playback cursor walks through all lanes simultaneously, highlighting the active segment(s) per speaker.
-
-This is distinct from a flat chat-log view — the lane layout preserves the temporal reality of who was talking when, and makes interruptions/reactions readable.
-
-## Bot ↔ Database Integration
-
-The bot writes to Postgres at 5 points:
-
-1. **`/record`** — creates session + participant rows
-2. **Consent button** — updates participant scope + consented_at, inserts audit log entry
-3. **Quorum met** — updates session status to `recording`
-4. **`/stop` finalization** — updates session with ended_at, duration, s3_prefix, status `uploaded`
-5. **Blocklist check** — reads `users.global_opt_out` before adding participants
-
-DB writes are non-blocking: if Postgres is down, bot logs the error and continues with S3. Sessions can be backfilled from S3 meta.json/consent.json.
-
-## Testing Strategy
-
-| Layer | Tool | What |
-|-------|------|------|
-| Unit | Vitest | Components, hooks, formatters with mocked API |
-| Integration | Vitest + React Testing Library | Page renders, consent flows, flag/edit interactions |
-| E2E | Playwright | Full OAuth flow (mock Discord server), transcript interaction, responsive layout |
-
-External service mocks:
-- **Discord OAuth:** Local mock server mimicking `/oauth2/authorize`, `/oauth2/token`, `/users/@me`
-- **Rust API:** MSW (Mock Service Worker) for frontend-only tests; real Axum + test Postgres for E2E
-- **S3:** `STORAGE_BACKEND=local` env flag serves test fixtures from disk
+- Next.js runs as a Node.js container in the OVP compose stack.
+- BFF is bound to the same container; browser traffic goes through the
+  compose stack's reverse proxy.
+- `DATA_API_URL` and `DATA_API_SHARED_SECRET` are injected via env.
+- Compose stacks live in `sessionhelper-hub/infra/`.

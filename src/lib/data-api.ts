@@ -1,5 +1,5 @@
 /**
- * Server-side client for the internal data API (ovp-data-api).
+ * Server-side client for the internal data API (chronicle-data-api).
  *
  * Authenticates with a shared secret, caches the bearer token,
  * and auto-refreshes on 401. Intended for use in Next.js API routes
@@ -19,7 +19,7 @@ async function authenticate(): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       shared_secret: SHARED_SECRET,
-      service_name: "ttrpg-collector-frontend",
+      service_name: "chronicle-portal",
     }),
   });
 
@@ -74,6 +74,40 @@ async function request<T>(
   return res.json();
 }
 
+/**
+ * Fetch a raw binary response from the data API (e.g. audio chunks).
+ * Returns the Response object directly so callers can stream or buffer it.
+ */
+async function requestRaw(
+  path: string,
+  options?: RequestInit & { retry?: boolean }
+): Promise<Response> {
+  const token = await getToken();
+  const url = `${DATA_API_URL}${path}`;
+
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...options?.headers,
+    },
+  });
+
+  if (res.status === 401 && options?.retry !== false) {
+    cachedToken = null;
+    return requestRaw(path, { ...options, retry: false });
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Data API error ${res.status}: ${res.statusText} ${body}`.trim()
+    );
+  }
+
+  return res;
+}
+
 // --- Public types for data-api responses ---
 
 export interface DataApiSession {
@@ -83,6 +117,7 @@ export interface DataApiSession {
   started_at: string;
   ended_at: string | null;
   status: string;
+  title: string | null;
   participant_count: number;
   segment_count: number;
   created_at: string;
@@ -92,7 +127,14 @@ export interface DataApiSession {
 export interface DataApiParticipant {
   id: string;
   session_id: string;
-  pseudo_id: string;
+  /**
+   * The joined user's pseudo_id. Matches `segments.speaker_pseudo_id` so
+   * the UI can look up display metadata for a given speaker. Null when
+   * the participant has no linked user row yet.
+   */
+  user_pseudo_id: string | null;
+  display_name: string | null;
+  character_name: string | null;
   consent_scope: string | null;
   joined_at: string;
   left_at: string | null;
@@ -156,6 +198,37 @@ export const dataApi = {
 
   getScenes: (id: string) =>
     request<DataApiScene[]>(`/internal/sessions/${id}/scenes`),
+
+  /**
+   * Fetch pre-mixed audio for a time range from the data-api.
+   * Returns compressed OGG/Opus (~20KB for 15s) or WAV fallback.
+   */
+  getMixedAudio: async (
+    sessionId: string,
+    start: number,
+    end: number,
+    format: string = "opus"
+  ): Promise<ArrayBuffer> => {
+    const res = await requestRaw(
+      `/internal/sessions/${sessionId}/audio/mixed?start=${start}&end=${end}&format=${format}`
+    );
+    return res.arrayBuffer();
+  },
+
+  /**
+   * Fetch a single raw PCM audio chunk for a speaker.
+   * Returns the Response so it can be streamed/buffered.
+   */
+  getAudioChunk: (sessionId: string, pseudoId: string, seq: number) =>
+    requestRaw(
+      `/internal/sessions/${sessionId}/audio/${pseudoId}/chunk/${seq}`
+    ),
+
+  /**
+   * Get the list of participants (with pseudo_ids) for building audio URLs.
+   */
+  getParticipantsForAudio: (id: string) =>
+    request<DataApiParticipant[]>(`/internal/sessions/${id}/participants`),
 
   /** Check if the data API is reachable and auth works. */
   healthCheck: async (): Promise<{ ok: boolean; error?: string }> => {
