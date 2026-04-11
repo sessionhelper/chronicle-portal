@@ -56,16 +56,51 @@ interface Block {
   columnSpeakers: [string, string] | null;
 }
 
+// Speaker display metadata from session_participants. Keyed by pseudo_id
+// (which matches Segment.speaker_pseudo_id). Populated by fetching
+// /api/sessions/[id]/participants.
+interface ParticipantMeta {
+  display_name: string | null;
+  character_name: string | null;
+}
+
 // Speaker names and colors are derived dynamically from the data.
 // No hardcoded IDs — works with any session's participants.
 const speakerNameCache: Record<string, string> = {};
 const speakerAccentCache: Record<string, { light: string; dark: string }> = {};
+let participantMetaCache: Record<string, ParticipantMeta> = {};
 let gmId = "";
 
 // Accent hues: warm brown (GM), blue, green, purple, red, gold
 const ACCENT_HUES = [30, 210, 140, 270, 350, 50];
 
-function initSpeakers(segments: Segment[]) {
+// Format display name for a speaker given their participant metadata.
+// - "Character Name (Discord Name)" if both are set
+// - "Discord Name" if only display_name is set
+// - fallback to the pseudo_id (truncated) otherwise
+function formatSpeakerLabel(
+  pseudoId: string,
+  meta: ParticipantMeta | undefined,
+): string {
+  if (meta?.character_name && meta.display_name) {
+    return `${meta.character_name} (${meta.display_name})`;
+  }
+  if (meta?.character_name) return meta.character_name;
+  if (meta?.display_name) return meta.display_name;
+  // Fallback: cleaned-up pseudo_id
+  return pseudoId.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function initSpeakers(
+  segments: Segment[],
+  metaByPseudoId: Record<string, ParticipantMeta> = {},
+) {
+  // Rebuild from scratch so stale entries from a previous session don't
+  // leak through when navigating between sessions.
+  for (const k of Object.keys(speakerNameCache)) delete speakerNameCache[k];
+  for (const k of Object.keys(speakerAccentCache)) delete speakerAccentCache[k];
+  participantMetaCache = metaByPseudoId;
+
   const seen: string[] = [];
   for (const s of segments) {
     if (!seen.includes(s.speaker_pseudo_id)) seen.push(s.speaker_pseudo_id);
@@ -78,8 +113,7 @@ function initSpeakers(segments: Segment[]) {
 
   for (let i = 0; i < seen.length; i++) {
     const id = seen[i];
-    // Use pseudo_id as display name, cleaned up
-    speakerNameCache[id] = id.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    speakerNameCache[id] = formatSpeakerLabel(id, metaByPseudoId[id]);
     const hue = ACCENT_HUES[i % ACCENT_HUES.length];
     speakerAccentCache[id] = {
       light: `hsl(${hue}, 55%, 35%)`,
@@ -252,9 +286,24 @@ function buildBlocks(segments: Segment[]): Block[] {
   return blocks;
 }
 
+interface SessionMeta {
+  id: string;
+  title: string | null;
+}
+
+interface ParticipantRow {
+  id: string;
+  session_id: string;
+  user_pseudo_id: string | null;
+  display_name: string | null;
+  character_name: string | null;
+}
+
 export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = React.use(params);
   const [data, setData] = useState<PipelineResult | null>(null);
+  const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null);
+  const [participantWarning, setParticipantWarning] = useState<string | null>(null);
   const audio = useAudioPlayback(sessionId);
   const { playing, currentTime } = audio;
   const [selectedScene, setSelectedScene] = useState<number | null>(null);
@@ -303,20 +352,67 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   });
 
   useEffect(() => {
-    fetch(`/api/sessions/${sessionId}/segments`)
-      .then((r) => r.json())
-      .then((segments: Segment[]) => {
-        // Wrap in PipelineResult shape
+    // Fetch segments, session detail, and participants in parallel so we
+    // can initialise speakers with display_name/character_name in a single
+    // pass. If participant metadata fails to load we still render the
+    // transcript with pseudo_id fallbacks (with a non-blocking warning).
+    let cancelled = false;
+    const segmentsReq = fetch(`/api/sessions/${sessionId}/segments`).then(
+      (r) => r.json() as Promise<Segment[]>,
+    );
+    const sessionReq = fetch(`/api/sessions/${sessionId}`)
+      .then((r) => (r.ok ? (r.json() as Promise<SessionMeta>) : null))
+      .catch(() => null);
+    const participantsReq = fetch(
+      `/api/sessions/${sessionId}/participants`,
+    )
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<ParticipantRow[]>;
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setParticipantWarning(
+            e instanceof Error ? e.message : "failed to load participants",
+          );
+        }
+        return [] as ParticipantRow[];
+      });
+
+    Promise.all([segmentsReq, sessionReq, participantsReq]).then(
+      ([segments, session, participants]) => {
+        if (cancelled) return;
+
+        // Build pseudo_id -> metadata map. The backend returns
+        // `user_pseudo_id` on ParticipantWithUser, which matches the
+        // `speaker_pseudo_id` on segments.
+        const metaByPseudoId: Record<string, ParticipantMeta> = {};
+        for (const p of participants) {
+          if (p.user_pseudo_id) {
+            metaByPseudoId[p.user_pseudo_id] = {
+              display_name: p.display_name,
+              character_name: p.character_name,
+            };
+          }
+        }
+
         const sorted = segments.sort((a, b) => a.start_time - b.start_time);
-        initSpeakers(sorted);
+        initSpeakers(sorted, metaByPseudoId);
+        setSessionMeta(session);
         setData({
           segments: sorted,
-          segments_produced: segments.filter(s => !s.excluded).length,
-          segments_excluded: segments.filter(s => s.excluded).length,
+          segments_produced: segments.filter((s) => !s.excluded).length,
+          segments_excluded: segments.filter((s) => s.excluded).length,
           scenes_detected: 0,
-          duration_processed: segments.length > 0 ? segments[segments.length - 1].end_time : 0,
+          duration_processed:
+            segments.length > 0 ? segments[segments.length - 1].end_time : 0,
         });
-      });
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
   }, [sessionId]);
 
   // Flash on block transition + scroll when active block leaves viewport
@@ -410,6 +506,18 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
 
   const blocks = useMemo(() => buildBlocks(filteredSegments), [filteredSegments]);
 
+  const maxTime = data
+    ? Math.max(...data.segments.filter((s) => !s.excluded).map((s) => s.end_time), 0)
+    : 0;
+
+  // Set session duration on the audio hook from segment metadata.
+  // Must be before the early return to keep hook order stable.
+  useEffect(() => {
+    if (maxTime > 0) {
+      audio.setDuration(maxTime);
+    }
+  }, [maxTime, audio]);
+
   if (!data) return (
     <AppShell>
       <div className="flex items-center justify-center h-64 font-sans text-ink-faint">Loading...</div>
@@ -417,15 +525,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   );
 
   const scenes = [...new Set(data.segments.filter((s) => !s.excluded).map((s) => s.chunk_group ?? 0))].sort((a, b) => a - b);
-  const maxTime = Math.max(...data.segments.filter((s) => !s.excluded).map((s) => s.end_time));
   const speakerCount = Object.keys(speakerNameCache).length;
-
-  // Set session duration on the audio hook from segment metadata
-  useEffect(() => {
-    if (maxTime > 0) {
-      audio.setDuration(maxTime);
-    }
-  }, [maxTime, audio]);
 
   return (
     <AppShell>
@@ -457,13 +557,21 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       {/* Session info header */}
       <div className="mb-4">
         <h1 className="font-serif text-xl font-semibold text-ink">
-          Session {sessionId.substring(0, 8)}
+          {sessionMeta?.title
+            ? sessionMeta.title
+            : `Session ${sessionId.substring(0, 8)}`}
         </h1>
         <p className="font-sans text-sm text-ink-light mt-0.5">
           {speakerCount} speaker{speakerCount !== 1 ? "s" : ""}
           {data.duration_processed > 0 && <> &middot; {formatTime(data.duration_processed)}</>}
           {data.segments_produced > 0 && <> &middot; {data.segments_produced} segments</>}
         </p>
+        {participantWarning && (
+          <p className="font-sans text-xs text-amber-600 mt-1">
+            Could not load participant names ({participantWarning}); showing
+            speaker IDs.
+          </p>
+        )}
       </div>
 
       {/* Control strip: playback + scene filter */}

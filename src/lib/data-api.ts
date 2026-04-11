@@ -117,6 +117,7 @@ export interface DataApiSession {
   started_at: string;
   ended_at: string | null;
   status: string;
+  title: string | null;
   participant_count: number;
   segment_count: number;
   created_at: string;
@@ -126,7 +127,14 @@ export interface DataApiSession {
 export interface DataApiParticipant {
   id: string;
   session_id: string;
-  pseudo_id: string;
+  /**
+   * The joined user's pseudo_id. Matches `segments.speaker_pseudo_id` so
+   * the UI can look up display metadata for a given speaker. Null when
+   * the participant has no linked user row yet.
+   */
+  user_pseudo_id: string | null;
+  display_name: string | null;
+  character_name: string | null;
   consent_scope: string | null;
   joined_at: string;
   left_at: string | null;
