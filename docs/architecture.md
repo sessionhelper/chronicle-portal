@@ -9,9 +9,9 @@ them, play back mixed audio for any time range, and (eventually) correct
 or flag segments.
 
 The frontend is a Next.js 15 / React 19 app that runs its own BFF layer
-in `src/app/api/*`. The BFF talks directly to `ovp-data-api` using the
+in `src/app/api/*`. The BFF talks directly to `chronicle-data-api` using the
 shared-secret auth protocol — there is no separate Axum public API in
-front of it today. The legacy `ovp-api` repo exists but is not wired in.
+front of it today. The legacy `chronicle-api` repo exists but is not wired in.
 
 ## Service architecture
 
@@ -36,7 +36,7 @@ front of it today. The legacy `ovp-api` repo exists but is not wired in.
                             │ HTTP (Bearer, shared-secret-issued)
                             │ WS  (SSE bridge — event fanout)
                             ▼
-                      ovp-data-api
+                      chronicle-data-api
                       (127.0.0.1:8001)
 ```
 
@@ -46,7 +46,7 @@ routes, which in turn use `src/lib/data-api.ts` to talk to the data-api.
 
 ## Key design decisions
 
-- **BFF-only — no separate public API.** `ovp-api` is dormant for the
+- **BFF-only — no separate public API.** `chronicle-api` is dormant for the
   portal use case. Everything the frontend needs is exposed under
   `/api/*` in the Next.js app, and the BFF forwards to the internal
   data-api. This keeps a single source of truth for authorization and
@@ -76,7 +76,7 @@ routes, which in turn use `src/lib/data-api.ts` to talk to the data-api.
 | Styling | Tailwind CSS 4 |
 | Component primitives | Shadcn/ui (Radix UI) |
 | Server runtime | Node.js (for `ws` / `next` API routes) |
-| Data source | `ovp-data-api` (Rust/Axum, HTTP + WS) |
+| Data source | `chronicle-data-api` (Rust/Axum, HTTP + WS) |
 
 ## Source layout
 
