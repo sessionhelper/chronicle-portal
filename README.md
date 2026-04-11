@@ -58,21 +58,43 @@ rights before segments enter the dataset candidate set.
 See [`docs/architecture.md`](docs/architecture.md) for the full BFF
 design, auth flow, and audio playback strategy.
 
-## Data license flags
+## Data license flags — four-corner model
 
-Every session segment carries two independent flags per speaker, set
-from the portal's consent UI:
+Every session participant carries **two independent boolean flags** on
+their `session_participants` row in `chronicle-data-api`, set from the
+consent flow in `chronicle-bot` at the start of a session and editable
+via this portal afterward. The two flags are orthogonal — they compose
+into a four-corner matrix:
 
-| `no_llm_training` | `no_public_release` | Published? | LLM training? | License |
-|---|---|---|---|---|
-| false | false | Yes (`ovp-open`) | Yes | CC BY-SA 4.0 |
-| true | false | Yes (`ovp-rail`) | No | CC BY-SA 4.0 + RAIL addendum |
-| false | true | No | Yes (internal only) | Internal use |
-| true | true | No | No | Fully restricted |
+| `no_llm_training` | `no_public_release` | Result | Label |
+|---|---|---|---|
+| false | false | Publish in the open dataset, allow LLM training | `ovp-open` — CC BY-SA 4.0 |
+| true  | false | Publish in the public dataset, exclude from LLM training corpora | `ovp-rail` — CC BY-SA 4.0 + a license addendum *(addendum text is tentative, see note)* |
+| false | true  | Keep private to Session Helper LLC for its own projects; do not release publicly | internal |
+| true  | true  | Fully restricted — do not publish, do not train | restricted |
 
-Defaults: both false (fully open). Players can toggle either flag at
-any time on the session detail page. See `docs/architecture.md`
-§ Data Licensing for the full consent flow.
+Defaults: both false (fully open). A participant can flip either flag
+at any time on the session detail page. Participation (`consent_scope`)
+is a separate upfront question in `chronicle-bot` — the flags only
+apply once a participant has said Yes to being recorded. Withdrawing
+consent is a different action from toggling the flags; it deletes the
+captured audio entirely.
+
+**Status of the `ovp-rail` addendum:** the label is in the DB and the
+UI, but **the actual addendum text does not exist yet.** Whether to
+adopt a RAIL variant (OpenRAIL, BigScience RAIL), write a custom
+no-training clause, or publish the second-row subset under plain CC
+BY-SA 4.0 with a best-effort "please don't train" request is an open
+question tracked in [`sessionhelper-hub/SPEC.md`](https://github.com/sessionhelper/sessionhelper-hub/blob/main/SPEC.md) §11.
+
+**Implementation status:** the type definitions and the underlying
+`chronicle-data-api` schema both match this model (two boolean columns
+on `session_participants`, partial-update PATCH route at
+`/internal/participants/{id}/license`). The bot already records the
+flags via a two-stage consent embed. **The portal's UI, BFF mutation
+routes, and Discord OAuth flow are pending a dedicated portal backend
+buildout** — the four-corner model is the intent, not yet the observable
+runtime behavior. Tracked as a Phase 1 / G2 item in `SPEC.md`.
 
 ## Quick start
 

@@ -197,10 +197,13 @@ mirror the data-api responses:
 - **Session** — id, guild_id, started_at, ended_at, status, title,
   participant_count, segment_count, etc.
 - **Participant (with user pseudo_id)** — id, session_id, user_pseudo_id,
-  display_name, character_name, consent_scope, license flags.
-  Display name and character name are supported on the data-api side
-  (`PATCH /internal/participants/{id}`) but are not yet surfaced in the
-  transcript viewer UI.
+  display_name, character_name, consent_scope, `no_llm_training` bool,
+  `no_public_release` bool. The two license flags are independent
+  booleans that compose into the four-corner license matrix (see
+  `../README.md` § Data license flags). Display name, character name,
+  and both license flags are supported on the data-api side (PATCH
+  `/internal/participants/{id}`, PATCH `/internal/participants/{id}/license`)
+  but are not yet surfaced in the portal UI.
 - **Segment** — segment_index, speaker_pseudo_id, start_time, end_time,
   text, original_text, confidence, chunk_group, excluded.
 - **Beat** / **Scene** — optional, produced by the LLM operators in the

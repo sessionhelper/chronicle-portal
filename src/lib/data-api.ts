@@ -136,9 +136,22 @@ export interface DataApiParticipant {
   display_name: string | null;
   character_name: string | null;
   consent_scope: string | null;
+  /**
+   * Per-participant license flags. Independent booleans stored on
+   * `session_participants` in chronicle-data-api. Toggled via
+   * PATCH /internal/participants/{id}/license. See the four-corner
+   * matrix in chronicle-portal/README.md.
+   */
+  no_llm_training: boolean;
+  no_public_release: boolean;
   joined_at: string;
   left_at: string | null;
   flags: string[];
+}
+
+export interface LicenseFlagUpdate {
+  no_llm_training?: boolean;
+  no_public_release?: boolean;
 }
 
 export interface DataApiSegment {
@@ -229,6 +242,17 @@ export const dataApi = {
    */
   getParticipantsForAudio: (id: string) =>
     request<DataApiParticipant[]>(`/internal/sessions/${id}/participants`),
+
+  /**
+   * Update a participant's license flags. Either flag can be omitted
+   * for a partial update; the data-api applies COALESCE so only the
+   * provided fields change.
+   */
+  updateParticipantLicense: (participantId: string, flags: LicenseFlagUpdate) =>
+    request<DataApiParticipant>(`/internal/participants/${participantId}/license`, {
+      method: "PATCH",
+      body: JSON.stringify(flags),
+    }),
 
   /** Check if the data API is reachable and auth works. */
   healthCheck: async (): Promise<{ ok: boolean; error?: string }> => {
