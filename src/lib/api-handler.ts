@@ -14,11 +14,17 @@
  *   });
  */
 
-import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
 import { AuthError } from "@/lib/server-auth";
 import { metrics } from "@/lib/metrics";
+
+function jsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 type RouteCtx<P extends Record<string, string>> = {
   params: Promise<P>;
@@ -43,31 +49,31 @@ export function apiHandler<P extends Record<string, string> = Record<string, nev
     } catch (err) {
       if (err instanceof AuthError) {
         status = err.status;
-        return NextResponse.json({ error: err.message }, { status });
+        return jsonResponse({ error: err.message }, status);
       }
       if (err instanceof ZodError) {
         status = 400;
-        return NextResponse.json(
+        return jsonResponse(
           { error: "invalid request", issues: err.flatten() },
-          { status },
+          status,
         );
       }
       // UpstreamError tags: err.upstream, err.status. Fall through to 502.
       const maybeUpstream = err as { upstream?: string; status?: number };
       if (maybeUpstream?.upstream) {
         status = 502;
-        return NextResponse.json(
+        return jsonResponse(
           {
             error: "upstream unavailable",
             upstream: maybeUpstream.upstream,
             upstream_status: maybeUpstream.status,
           },
-          { status },
+          status,
         );
       }
       console.error(`[${route}] unhandled`, err);
       status = 500;
-      return NextResponse.json({ error: "internal error" }, { status });
+      return jsonResponse({ error: "internal error" }, status);
     } finally {
       metrics.portal_request_latency_ms
         .labels(route, req.method, String(status))

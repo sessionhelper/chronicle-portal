@@ -346,6 +346,19 @@ class DataApiClient {
     });
   }
 
+  async streamParticipantAudio(
+    sessionId: string,
+    pseudoId: string,
+    range?: string | null,
+  ): Promise<Response> {
+    const headers: Record<string, string> = {};
+    if (range) headers["Range"] = range;
+    return this.raw(
+      `/internal/sessions/${sessionId}/participants/${pseudoId}/audio/stream`,
+      { op: "stream_participant_audio", headers },
+    );
+  }
+
   // ---- Worker admin ----
 
   async triggerRerun(sessionId: string): Promise<Response> {

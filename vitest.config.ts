@@ -7,6 +7,7 @@ export default defineConfig({
     include: ["tests/unit/**/*.test.ts"],
     // Never allow e2e to run under vitest.
     exclude: ["node_modules/**", "tests/e2e/**", ".next/**"],
+    setupFiles: ["tests/setup.ts"],
   },
   resolve: {
     alias: {

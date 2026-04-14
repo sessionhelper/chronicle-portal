@@ -1,5 +1,3 @@
-import { NextResponse } from "next/server";
-
 import { apiHandler } from "@/lib/api-handler";
 import { dataApiClient } from "@/lib/data-api-client";
 import { requireAdmin } from "@/lib/server-auth";
@@ -11,9 +9,12 @@ export const POST = apiHandler<{ id: string }>(
     const { id } = await params;
     await requireAdmin();
     const res = await dataApiClient.triggerRerun(id);
-    return NextResponse.json(
-      { ok: res.ok, upstream_status: res.status },
-      { status: res.ok ? 202 : 502 },
+    return new Response(
+      JSON.stringify({ ok: res.ok, upstream_status: res.status }),
+      {
+        status: res.ok ? 202 : 502,
+        headers: { "Content-Type": "application/json" },
+      },
     );
   },
 );
