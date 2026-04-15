@@ -1,90 +1,90 @@
 # chronicle-portal
 
-> Org-wide conventions live in `/home/alex/sessionhelper-hub/CLAUDE.md`. The full **Parchment design system** + **Uncodixfy UI rules** live in `/home/alex/sessionhelper-hub/design/uncodixfy-ui.md` — read that before any UI work.
+> Org-wide conventions live in `/home/alex/sessionhelper-hub/CLAUDE.md`.
+> Authoritative spec: `/home/alex/sessionhelper-hub/docs/modules/chronicle-portal.md`.
 
-Participant portal for the Open Voice Project. Users whose voice was recorded in TTRPG sessions log in via Discord OAuth, review their sessions, edit transcripts, flag private info, manage consent, and export/delete their data. Talks to a Rust (Axum) backend.
+Next.js app with a BFF layer in front of the Rust data-api. Three role surfaces (admin / GM / player) on one codebase. The BFF is the security boundary — the browser never sees `DATA_API_URL`.
 
 ## Stack
 
-- **Next.js 15** + **React 19** (App Router)
-- **TypeScript**, strict mode
-- **Tailwind CSS 4** (PostCSS)
-- **Shadcn/ui** — cherry-picked Radix primitives only: Dialog, Button, Badge, Input, RadioGroup, Toast, Tooltip, DropdownMenu
-- **Sonner** for toasts
-- **Lucide** for icons
-- **react-markdown** for markdown rendering
-- No external state management — plain React `useState` / `useContext`
-- No form library — controlled inputs
+- **Next.js 15** (App Router, server actions)
+- **React 19**
+- **TypeScript** strict
+- **Auth.js v5** (Discord provider, JWT strategy, 7-day TTL)
+- **Tailwind 3 + shadcn/ui** (Radix primitives)
+- **Zod** for BFF body validation and data-api parsing
+- **prom-client** for metrics at `/api/metrics`
+- **OpenTelemetry SDK** registered via `instrumentation.ts`
+- `ws` for the single portal → data-api WebSocket subscription
 
 ## Layout
 
 ```
 src/
-  app/                     # Next.js App Router
-    page.tsx               # Landing
-    layout.tsx             # Root layout
-    globals.css            # Tailwind + theme
-    auth/discord/          # OAuth redirect + callback
-    dashboard/             # Protected routes (middleware auth guard)
-      page.tsx             # Session list
-      sessions/[id]/       # Session detail + transcript viewer
-      settings/            # Global opt-out, export, deletion
-      audit/               # Audit log
+  app/
+    page.tsx                      # landing (public)
+    login/page.tsx                # Auth.js entry
+    dashboard/page.tsx            # signed-in home
+    sessions/page.tsx             # session list
+    sessions/[id]/page.tsx        # detail + playback + transcript
+    me/page.tsx                   # consent, license, delete-my-audio
+    admin/page.tsx                # user list + is_admin toggles
+    api/
+      auth/[...nextauth]/         # Auth.js mount
+      health/                     # liveness
+      metrics/                    # prom-client scrape
+      sessions/                   # list, detail, summary, segments, events (SSE), audio
+      segments/[id]/              # text edits
+      me/sessions/[id]/           # consent, license, delete-my-audio
+      admin/users/                # admin toggles
   components/
-    layout/                # Nav, footer, dashboard shell
-    ui/                    # Shadcn primitives
-    transcript/            # Transcript viewer, segment rows, editor, flags
-  hooks/
-    useAuth.ts             # Current user fetch + cache
-    useTranscript.ts       # Segments, flagging, editing with optimistic updates
-    useAudioPlayback.ts    # Per-clip + full-session playback, segment sync
-    usePolling.ts          # Generic poller (used for data export status)
+    app-shell.tsx                 # server-rendered chrome
+    session-live-badge.tsx        # SSE-driven 🔴 recording badge
+    segment-list.tsx              # transcript rows + inline editor
+    me/*.tsx                      # ConsentForm, LicenseSwitches, DeleteMyAudio
+    admin/user-row.tsx            # is_admin toggle
+    sign-in-button.tsx / sign-out-button.tsx
+    ui/*.tsx                      # shadcn primitives
   lib/
-    api-client.ts          # Centralized REST client, grouped by domain
-    types.ts               # TypeScript interfaces for all API types
-    format.ts              # Date / duration / time formatters
-  middleware.ts            # Auth guard for /dashboard/*
+    auth.ts                       # next-auth config + signIn/signOut exports
+    server-auth.ts                # resolveUser, requireUser, requireAdmin, requireSessionAccess
+    data-api-client.ts            # process-wide DataApiClient singleton
+    event-bus.ts                  # WS subscription + SSE fan-out
+    filters.ts                    # role-based response filtering
+    api-handler.ts                # apiHandler() wrapper + parseJson()
+    page-data.ts                  # shared server-component data fetchers
+    metrics.ts                    # prom-client registry
+    env.ts                        # single source of truth for process.env
+    utils.ts                      # cn(), formatters
+    schemas/
+      data-api.ts                 # Zod for data-api shapes
+      bff.ts                      # Zod for BFF request bodies
+  middleware.ts                   # Auth.js gate for /dashboard, /sessions, /me, /admin
+  types/next-auth.d.ts            # module augmentation
+instrumentation.ts                # OpenTelemetry SDK init
 ```
 
-## Repo-specific conventions
+## Conventions
 
-- `"use client"` at the top of any interactive component.
-- API client pattern: `api.domain.action()`. No direct fetches outside `src/lib/api-client.ts`.
-- Dynamic routes: `[paramName]` directories.
-- File uploads use `FormData` against `NEXT_PUBLIC_BACKEND_URL` directly to bypass Next.js body size limits.
-- Server-side auth derivation: `is_own_line` and `can_edit` come from the backend per segment. Never compute edit permission client-side.
-- Optimistic updates on transcript flag/edit; revert on failure.
-- Full-session playback polls `currentTime` every 200ms to sync the active transcript segment.
+- **BFF boundary rule:** React components never call the data-api directly; they only call `/api/*`. Server components can call `dataApiClient` + `page-data` helpers directly because they're already server-side.
+- **Happy-path handlers:** every BFF route wraps its logic in `apiHandler(route, async (req, { params }) => { ... })`. The wrapper centralises error → HTTP translation. Handlers throw `AuthError(status, msg)` / `ZodError` — no per-handler status guards.
+- **Authorization choke points:** `requireUser()`, `requireAdmin()`, `requireSessionAccess()`. Role is derived per-request from data-api state, never trusted from the JWT beyond identity.
+- **PATCH bodies:** strict Zod schemas. `author_service` / `author_user_pseudo_id` / state-machine fields are never accepted from the client — the BFF sets them.
+- **Metrics:** emitted from `apiHandler` and `DataApiClient`. New route = free metric.
 
-## Backend integration
-
-- Backend is **Rust/Axum**, not Python.
-- Dev: Next.js rewrites proxy `/api/*` → `BACKEND_URL` (default `http://localhost:8000`).
-- Direct backend URL via `NEXT_PUBLIC_BACKEND_URL` for file uploads.
-- REST verbs: `GET` read, `POST` create, `PATCH` update, `DELETE` remove.
-
-## Env vars
-
-| Var | Required | Default |
-|---|---|---|
-| `BACKEND_URL` | no | `http://localhost:8000` |
-| `NEXT_PUBLIC_BACKEND_URL` | no | same as `BACKEND_URL` |
-| `NEXT_PUBLIC_DISCORD_CLIENT_ID` | yes | — |
-| `NEXT_PUBLIC_DISCORD_REDIRECT_URI` | no | `http://localhost:3000/auth/discord/callback` |
-
-## Build / run
+## Run
 
 ```bash
 npm install
-npm run dev        # port 3000
+cp .env.example .env.local        # fill in Discord + SHARED_SECRET
+npm run dev                       # :3000
 npm run build
 npm run lint
+npm test                          # vitest unit tests for BFF + schemas
+npm run test:e2e                  # Playwright smoke (needs dev-server + data-api)
 ```
 
-## Design notes (tl;dr — see hub `design/uncodixfy-ui.md` for the full ruleset)
+## Env
 
-- **Parchment palette**: background `#f5f0e8`, accent `#8b4513` (saddle brown), text `#2c2416`. Warm editorial, no blue-tinted "premium dark mode".
-- **Typography**: Crimson Pro (serif) for headings/body, Inter (sans) for nav/metadata/tables.
-- **Layout**: centered max-width 660–720px, single column below 640px. No hero sections inside dashboards.
-- **Components**: 4px radius on cards/buttons, 1px borders, shadows under 8px blur, transitions 100–200ms opacity/color only.
-- **Banned**: glassmorphism, gradients on buttons, pill shapes, oversized rounded corners (20–32px), eyebrow labels, `<small>` headers, decorative copy.
+See `.env.example`. Required at runtime:
+`DATA_API_URL`, `SHARED_SECRET`, `NEXTAUTH_URL`, `NEXTAUTH_SECRET`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`.

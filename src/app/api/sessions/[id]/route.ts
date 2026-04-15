@@ -1,16 +1,19 @@
 import { NextResponse } from "next/server";
-import { dataApi } from "@/lib/data-api";
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+import { apiHandler } from "@/lib/api-handler";
+import { dataApiClient } from "@/lib/data-api-client";
+import { requireSessionAccess, requireUser } from "@/lib/server-auth";
+
+export const GET = apiHandler<{ id: string }>(
+  "api.sessions.get",
+  async (_req, { params }) => {
     const { id } = await params;
-    const session = await dataApi.getSession(id);
-    return NextResponse.json(session);
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Failed to fetch session";
-    return NextResponse.json({ error: message }, { status: 502 });
-  }
-}
+    const user = await requireUser();
+    await requireSessionAccess(user, id);
+    const [session, participants] = await Promise.all([
+      dataApiClient.getSession(id),
+      dataApiClient.listParticipants(id),
+    ]);
+    return NextResponse.json({ session, participants });
+  },
+);

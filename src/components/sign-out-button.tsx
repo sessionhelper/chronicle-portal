@@ -1,0 +1,17 @@
+import { Button } from "@/components/ui/button";
+import { signOut } from "@/lib/auth";
+
+export function SignOutButton() {
+  return (
+    <form
+      action={async () => {
+        "use server";
+        await signOut({ redirectTo: "/" });
+      }}
+    >
+      <Button variant="ghost" size="sm" type="submit">
+        Sign out
+      </Button>
+    </form>
+  );
+}

@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
-import { dataApi } from "@/lib/data-api";
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
+import { apiHandler } from "@/lib/api-handler";
+import { dataApiClient } from "@/lib/data-api-client";
+import { filterSegmentsForRole } from "@/lib/filters";
+import { requireSessionAccess, requireUser } from "@/lib/server-auth";
+
+export const GET = apiHandler<{ id: string }>(
+  "api.sessions.segments.list",
+  async (_req, { params }) => {
     const { id } = await params;
-    const segments = await dataApi.getSegments(id);
-    return NextResponse.json(segments);
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "Failed to fetch segments";
-    return NextResponse.json({ error: message }, { status: 502 });
-  }
-}
+    const user = await requireUser();
+    const { role } = await requireSessionAccess(user, id);
+    const segments = await dataApiClient.listSegments(id);
+    return NextResponse.json(filterSegmentsForRole(user, role, segments));
+  },
+);
