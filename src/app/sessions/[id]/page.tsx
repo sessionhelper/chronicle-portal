@@ -95,7 +95,7 @@ export default async function SessionDetailPage({ params }: Props) {
         initialSegments={segments}
         initialParticipants={participants}
         audioSrc={`/api/sessions/${session.id}/audio/mixed/stream`}
-        canEdit={(seg) => canEdit[seg.id] ?? false}
+        canEdit={canEdit}
       />
 
       {user.is_admin && participants.length > 0 && (

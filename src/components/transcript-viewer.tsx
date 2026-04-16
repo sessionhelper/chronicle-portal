@@ -165,7 +165,7 @@ interface Props {
   initialSegments: Segment[];
   initialParticipants: Participant[];
   audioSrc: string;
-  canEdit: (seg: Segment) => boolean;
+  canEdit: Record<string, boolean>;
 }
 
 export function TranscriptViewer({
@@ -198,7 +198,7 @@ export function TranscriptViewer({
   }, []);
 
   const startEdit = (seg: Segment) => {
-    if (!canEdit(seg)) return;
+    if (!canEdit[seg.id]) return;
     setEditingId(seg.id);
     setEditText(seg.text ?? "");
   };
@@ -300,7 +300,7 @@ function SingleBlock({
   saveEdit: (seg: Segment) => Promise<void>;
   cancelEdit: () => void;
   savingId: string | null;
-  canEdit: (seg: Segment) => boolean;
+  canEdit: Record<string, boolean>;
   seekTo: (ms: number) => void;
 }) {
   const accent = speakerColor(speaker);
@@ -331,7 +331,7 @@ function SingleBlock({
       <div className="space-y-1.5">
         {block.segments.map((seg) => {
           const isEditing = editingId === seg.id;
-          const editable = canEdit(seg);
+          const editable = canEdit[seg.id] ?? false;
           return (
             <div
               key={seg.id}
