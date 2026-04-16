@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { MuteRanges } from "@/components/admin/mute-ranges";
@@ -12,9 +13,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { canEditSegment } from "@/lib/filters";
 import { fetchSessionDetail } from "@/lib/page-data";
-import { AuthError } from "@/lib/server-auth";
+import { AuthError, resolveSessionRole } from "@/lib/server-auth";
 import { formatDate, formatDuration } from "@/lib/utils";
 
 type Props = { params: Promise<{ id: string }> };
@@ -33,6 +35,8 @@ export default async function SessionDetailPage({ params }: Props) {
   }
 
   const { user, session, participants, segments, summary } = data;
+  const { role } = await resolveSessionRole(user, id);
+  const canManage = role === "admin" || role === "gm";
   const canEdit: Record<string, boolean> = {};
   for (const seg of segments) {
     canEdit[seg.id] = canEditSegment(user, seg);
@@ -53,6 +57,11 @@ export default async function SessionDetailPage({ params }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {canManage && (
+            <Link href={`/sessions/${session.id}/manage`}>
+              <Button variant="secondary" size="sm">Manage</Button>
+            </Link>
+          )}
           {user.is_admin && <RerunButton sessionId={session.id} />}
           <SessionLiveBadge
             sessionId={session.id}
