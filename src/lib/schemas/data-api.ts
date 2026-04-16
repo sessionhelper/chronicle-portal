@@ -61,10 +61,11 @@ export const SessionSummarySchema = z.object({
 });
 export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 
-export const ParticipantSchema = z.object({
+const ParticipantBaseSchema = z.object({
   id: z.string(),
   session_id: z.string(),
-  user_pseudo_id: z.string().nullable(),
+  user_pseudo_id: z.string().nullable().optional(),
+  pseudo_id: z.string().nullable().optional(),
   display_name: z.string().nullable().optional(),
   character_name: z.string().nullable().optional(),
   consent_scope: z.enum(["full", "decline", "timed_out"]).nullable().optional(),
@@ -75,6 +76,12 @@ export const ParticipantSchema = z.object({
   left_at: z.string().nullable().optional(),
   data_wiped_at: z.string().nullable().optional(),
 });
+// Data-api returns `pseudo_id`; legacy/docs refer to `user_pseudo_id`.
+// Normalize so downstream code can always read `user_pseudo_id`.
+export const ParticipantSchema = ParticipantBaseSchema.transform((p) => ({
+  ...p,
+  user_pseudo_id: p.user_pseudo_id ?? p.pseudo_id ?? null,
+}));
 export type Participant = z.infer<typeof ParticipantSchema>;
 
 export const ParticipantListSchema = z.array(ParticipantSchema);
