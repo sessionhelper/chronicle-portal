@@ -167,7 +167,10 @@ class DataApiClient {
     return this.json(
       `/internal/users/${pseudoId}`,
       "get_user",
-      (v) => UserSchema.parse(v),
+      (v) => {
+        const obj = v as Record<string, unknown>;
+        return UserSchema.parse(obj.user ?? obj);
+      },
     );
   }
 
