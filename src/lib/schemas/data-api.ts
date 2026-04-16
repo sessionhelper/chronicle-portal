@@ -34,8 +34,8 @@ export const SessionSchema = z.object({
   campaign_name: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
   initiator_pseudo_id: z.string().nullable().optional(),
-  participant_count: z.number().int().nonnegative().default(0),
-  segment_count: z.number().int().nonnegative().default(0),
+  participant_count: z.number().int().nonnegative().nullable().default(0),
+  segment_count: z.number().int().nonnegative().nullable().default(0),
   s3_prefix: z.string().nullable().optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
@@ -45,10 +45,10 @@ export type Session = z.infer<typeof SessionSchema>;
 export const SessionListSchema = z.array(SessionSchema);
 
 export const SessionSummarySchema = z.object({
-  chunk_count: z.number().int().nonnegative(),
-  participant_count: z.number().int().nonnegative(),
-  duration_ms: z.number().int().nonnegative(),
-  segment_count: z.number().int().nonnegative(),
+  chunk_count: z.number().int().nonnegative().nullable().default(0),
+  participant_count: z.number().int().nonnegative().nullable().default(0),
+  duration_ms: z.number().int().nonnegative().nullable().default(0),
+  segment_count: z.number().int().nonnegative().nullable().default(0),
   beat_count: z.number().int().nonnegative(),
   scene_count: z.number().int().nonnegative(),
   mute_range_count: z.number().int().nonnegative(),
