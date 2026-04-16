@@ -1,14 +1,15 @@
 import { apiHandler } from "@/lib/api-handler";
-import { dataApiClient } from "@/lib/data-api-client";
+import { assembleWavResponse } from "@/lib/audio-assembler";
 import { AuthError, requireSessionAccess, requireUser } from "@/lib/server-auth";
 
 /**
- * Per-speaker audio stream. Admin + GM can fetch any participant;
- * players are restricted to their own pseudo_id.
+ * Per-speaker audio stream — assembles raw PCM chunks into a WAV.
+ * Admin + GM can fetch any participant; players are restricted to their
+ * own pseudo_id.
  */
 export const GET = apiHandler<{ id: string; pseudo_id: string }>(
   "api.sessions.audio.participant.stream",
-  async (req, { params }) => {
+  async (_req, { params }) => {
     const { id, pseudo_id } = await params;
     const user = await requireUser();
     const { role } = await requireSessionAccess(user, id);
@@ -17,28 +18,10 @@ export const GET = apiHandler<{ id: string; pseudo_id: string }>(
       throw new AuthError(403, "forbidden");
     }
 
-    const upstream = await dataApiClient.streamParticipantAudio(
-      id,
-      pseudo_id,
-      req.headers.get("range"),
-    );
-
-    const headers = new Headers();
-    for (const h of [
-      "content-type",
-      "content-length",
-      "content-range",
-      "accept-ranges",
-      "cache-control",
-    ]) {
-      const v = upstream.headers.get(h);
-      if (v) headers.set(h, v);
+    const wav = await assembleWavResponse(id, pseudo_id);
+    if (!wav) {
+      return new Response("no audio chunks for participant", { status: 404 });
     }
-    if (!headers.has("content-type")) headers.set("content-type", "audio/ogg");
-
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers,
-    });
+    return wav;
   },
 );
