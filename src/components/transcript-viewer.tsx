@@ -2,16 +2,20 @@
 
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 
+import {
+  useAudioPlayback,
+  type PlaybackRate,
+} from "@/hooks/use-audio-playback";
 import type { Participant, Segment } from "@/lib/schemas/data-api";
 
 /* ---------------- Speaker labels + colors ---------------- */
 
-// 6 stable hues — GM gets warm brown (30°), others rotate.
 const ACCENT_HUES = [30, 210, 140, 270, 350, 50];
 
 interface SpeakerMeta {
@@ -77,7 +81,7 @@ function confDot(conf: number | null | undefined): string {
   return "#ef4444";
 }
 
-/* ---------------- Block grouping with overlap detection ---------------- */
+/* ---------------- Block grouping ---------------- */
 
 type Block =
   | { type: "single"; pid: string; segments: Segment[]; startMs: number; endMs: number }
@@ -146,7 +150,7 @@ function buildBlocks(segments: Segment[]): Block[] {
   return blocks;
 }
 
-/* ---------------- Edit handling ---------------- */
+/* ---------------- Helpers ---------------- */
 
 async function patchSegment(segmentId: string, text: string): Promise<Segment> {
   const res = await fetch(`/api/segments/${segmentId}`, {
@@ -156,6 +160,20 @@ async function patchSegment(segmentId: string, text: string): Promise<Segment> {
   });
   if (!res.ok) throw new Error(`PATCH segment ${res.status}`);
   return (await res.json()) as Segment;
+}
+
+const RATE_PRESETS: PlaybackRate[] = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+function findActiveSegmentIdx(segments: Segment[], timeMs: number): number {
+  // Linear scan is fine for typical session size (few hundred segments).
+  // The worst-case is O(n) per timeupdate tick (~4 per second); still
+  // cheap. Switch to bisection if sessions ever run into the thousands.
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i];
+    if (timeMs >= s.start_ms && timeMs < s.end_ms) return i;
+    if (s.start_ms > timeMs) return Math.max(0, i - 1);
+  }
+  return segments.length - 1;
 }
 
 /* ---------------- Component ---------------- */
@@ -182,6 +200,9 @@ export function TranscriptViewer({
   const [editText, setEditText] = useState("");
   const [savingId, setSavingId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  const audio = useAudioPlayback(audioRef);
 
   const { byPid, gmPid } = useMemo(
     () => buildSpeakerMap(segments, initialParticipants),
@@ -190,38 +211,119 @@ export function TranscriptViewer({
 
   const blocks = useMemo(() => buildBlocks(segments), [segments]);
 
-  const seekTo = useCallback((ms: number) => {
-    const a = audioRef.current;
-    if (!a) return;
-    a.currentTime = ms / 1000;
-    void a.play();
-  }, []);
+  // Track the segment whose time window contains currentTime for
+  // active-block highlighting. Updates as playback progresses.
+  const activeSegmentIdx = useMemo(
+    () => (audio.playing ? findActiveSegmentIdx(segments, audio.currentTimeMs) : -1),
+    [segments, audio.currentTimeMs, audio.playing],
+  );
+  const activeSegmentId =
+    activeSegmentIdx >= 0 ? segments[activeSegmentIdx]?.id ?? null : null;
 
-  const startEdit = (seg: Segment) => {
-    if (!canEdit[seg.id]) return;
-    setEditingId(seg.id);
-    setEditText(seg.text ?? "");
-  };
+  // When the active block leaves the viewport, auto-scroll it back in.
+  // Keep the scroll cheap: only fire when id changes, and use smooth
+  // scroll only if the element is noticeably off-screen.
+  const lastScrolledIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeSegmentId || activeSegmentId === lastScrolledIdRef.current) return;
+    const el = segmentRefs.current[activeSegmentId];
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const vh = window.innerHeight;
+    if (r.bottom < 80 || r.top > vh - 80) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    lastScrolledIdRef.current = activeSegmentId;
+  }, [activeSegmentId]);
 
-  const saveEdit = async (seg: Segment) => {
-    const trimmed = editText.trim();
-    if (!trimmed || trimmed === (seg.text ?? "")) {
-      setEditingId(null);
-      return;
-    }
-    setSavingId(seg.id);
-    try {
-      const updated = await patchSegment(seg.id, trimmed);
-      setSegments((prev) =>
-        prev.map((s) => (s.id === seg.id ? { ...s, ...updated } : s)),
-      );
-      setEditingId(null);
-    } catch (err) {
-      console.error("save edit failed", err);
-    } finally {
-      setSavingId(null);
-    }
-  };
+  const startEdit = useCallback(
+    (seg: Segment) => {
+      if (!canEdit[seg.id]) return;
+      setEditingId(seg.id);
+      setEditText(seg.text ?? "");
+    },
+    [canEdit],
+  );
+
+  const saveEdit = useCallback(
+    async (seg: Segment) => {
+      const trimmed = editText.trim();
+      if (!trimmed || trimmed === (seg.text ?? "")) {
+        setEditingId(null);
+        return;
+      }
+      setSavingId(seg.id);
+      try {
+        const updated = await patchSegment(seg.id, trimmed);
+        setSegments((prev) =>
+          prev.map((s) => (s.id === seg.id ? { ...s, ...updated } : s)),
+        );
+        setEditingId(null);
+      } catch (err) {
+        console.error("save edit failed", err);
+      } finally {
+        setSavingId(null);
+      }
+    },
+    [editText],
+  );
+
+  const playSegment = useCallback(
+    (seg: Segment) => audio.playSegmentMs(seg.start_ms, seg.end_ms),
+    [audio],
+  );
+
+  // Keyboard shortcuts — disabled while typing into an input/textarea
+  // so the user can still edit. Shortcuts:
+  //   space   play/pause
+  //   j / k   prev / next segment (seek)
+  //   .       replay current segment
+  //   e       edit the currently-active segment (if editable)
+  //   + / -   bump playback rate up / down through presets
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      const tgt = ev.target as HTMLElement | null;
+      const typing =
+        tgt &&
+        (tgt.tagName === "INPUT" ||
+          tgt.tagName === "TEXTAREA" ||
+          tgt.isContentEditable);
+      if (typing) return;
+
+      const curIdx = findActiveSegmentIdx(segments, audio.currentTimeMs);
+
+      if (ev.code === "Space") {
+        ev.preventDefault();
+        audio.togglePlay();
+      } else if (ev.key === "j") {
+        ev.preventDefault();
+        const prev = segments[Math.max(0, curIdx - 1)];
+        if (prev) audio.playFromMs(prev.start_ms);
+      } else if (ev.key === "k") {
+        ev.preventDefault();
+        const nxt = segments[Math.min(segments.length - 1, curIdx + 1)];
+        if (nxt) audio.playFromMs(nxt.start_ms);
+      } else if (ev.key === ".") {
+        ev.preventDefault();
+        const cur = segments[curIdx];
+        if (cur) playSegment(cur);
+      } else if (ev.key === "e") {
+        ev.preventDefault();
+        const cur = segments[curIdx];
+        if (cur && canEdit[cur.id]) startEdit(cur);
+      } else if (ev.key === "+" || ev.key === "=") {
+        ev.preventDefault();
+        const i = RATE_PRESETS.indexOf(audio.playbackRate);
+        if (i < RATE_PRESETS.length - 1) audio.setPlaybackRate(RATE_PRESETS[i + 1]);
+      } else if (ev.key === "-") {
+        ev.preventDefault();
+        const i = RATE_PRESETS.indexOf(audio.playbackRate);
+        if (i > 0) audio.setPlaybackRate(RATE_PRESETS[i - 1]);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [audio, segments, canEdit, playSegment, startEdit]);
 
   if (segments.length === 0) {
     return (
@@ -233,13 +335,16 @@ export function TranscriptViewer({
 
   return (
     <div className="space-y-4">
-      <audio
-        ref={audioRef}
-        controls
-        className="sticky top-2 z-10 w-full rounded bg-background/95 shadow"
-        src={audioSrc}
-        preload="metadata"
-      />
+      <div className="sticky top-2 z-10 space-y-2 rounded bg-background/95 p-2 shadow">
+        <audio
+          ref={audioRef}
+          controls
+          className="w-full"
+          src={audioSrc}
+          preload="metadata"
+        />
+        <PlaybackToolbar audio={audio} segments={segments} />
+      </div>
 
       <div className="space-y-3">
         {blocks.map((block, idx) =>
@@ -257,7 +362,10 @@ export function TranscriptViewer({
               cancelEdit={() => setEditingId(null)}
               savingId={savingId}
               canEdit={canEdit}
-              seekTo={seekTo}
+              activeSegmentId={activeSegmentId}
+              segmentRefs={segmentRefs}
+              seekTo={audio.seekMs}
+              playSegment={playSegment}
             />
           ) : (
             <OverlapBlock
@@ -265,10 +373,68 @@ export function TranscriptViewer({
               block={block}
               byPid={byPid}
               gmPid={gmPid}
-              seekTo={seekTo}
+              activeSegmentId={activeSegmentId}
+              segmentRefs={segmentRefs}
+              seekTo={audio.seekMs}
+              playSegment={playSegment}
             />
           ),
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- PlaybackToolbar — rate control + shortcut hint ---------------- */
+
+function PlaybackToolbar({
+  audio,
+  segments,
+}: {
+  audio: ReturnType<typeof useAudioPlayback>;
+  segments: Segment[];
+}) {
+  const activeIdx = audio.playing
+    ? findActiveSegmentIdx(segments, audio.currentTimeMs)
+    : -1;
+  const total = segments.length;
+
+  return (
+    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+      <div className="flex items-center gap-3">
+        <span>
+          {audio.playing
+            ? activeIdx >= 0
+              ? `Segment ${activeIdx + 1} / ${total}`
+              : "Playing"
+            : "Paused"}
+        </span>
+        <span className="opacity-70">
+          <kbd className="rounded border px-1">Space</kbd> play ·{" "}
+          <kbd className="rounded border px-1">j</kbd>/<kbd className="rounded border px-1">k</kbd>{" "}
+          prev/next · <kbd className="rounded border px-1">.</kbd> replay ·{" "}
+          <kbd className="rounded border px-1">e</kbd> edit ·{" "}
+          <kbd className="rounded border px-1">+</kbd>/<kbd className="rounded border px-1">-</kbd>{" "}
+          speed
+        </span>
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="mr-1">speed</span>
+        {RATE_PRESETS.map((r) => (
+          <button
+            key={r}
+            onClick={() => audio.setPlaybackRate(r)}
+            className={
+              "rounded px-1.5 py-0.5 text-[11px] " +
+              (audio.playbackRate === r
+                ? "bg-primary text-primary-foreground"
+                : "border hover:bg-accent")
+            }
+            title={`Set playback rate to ${r}x`}
+          >
+            {r}×
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -288,7 +454,10 @@ function SingleBlock({
   cancelEdit,
   savingId,
   canEdit,
+  activeSegmentId,
+  segmentRefs,
   seekTo,
+  playSegment,
 }: {
   block: Extract<Block, { type: "single" }>;
   speaker: SpeakerMeta | undefined;
@@ -301,7 +470,10 @@ function SingleBlock({
   cancelEdit: () => void;
   savingId: string | null;
   canEdit: Record<string, boolean>;
+  activeSegmentId: string | null;
+  segmentRefs: React.RefObject<Record<string, HTMLDivElement | null>>;
   seekTo: (ms: number) => void;
+  playSegment: (seg: Segment) => void;
 }) {
   const accent = speakerColor(speaker);
   return (
@@ -332,10 +504,17 @@ function SingleBlock({
         {block.segments.map((seg) => {
           const isEditing = editingId === seg.id;
           const editable = canEdit[seg.id] ?? false;
+          const isActive = activeSegmentId === seg.id;
           return (
             <div
               key={seg.id}
-              className="group flex gap-2"
+              ref={(el) => {
+                segmentRefs.current[seg.id] = el;
+              }}
+              className={
+                "group relative flex gap-2 rounded px-1 transition-colors " +
+                (isActive ? "bg-accent/60" : "")
+              }
               onDoubleClick={() => editable && startEdit(seg)}
             >
               <button
@@ -374,17 +553,24 @@ function SingleBlock({
                   </div>
                 </div>
               ) : (
-                <p
-                  className={
-                    "flex-1 text-sm leading-relaxed " +
-                    (editable
-                      ? "cursor-text rounded px-1 hover:bg-accent/30"
-                      : "")
-                  }
-                  title={editable ? "Double-click to edit" : undefined}
-                >
-                  {seg.text ?? <em className="text-muted-foreground">(no text)</em>}
-                </p>
+                <>
+                  <p
+                    className={
+                      "flex-1 text-sm leading-relaxed " +
+                      (editable ? "cursor-text hover:bg-accent/30 rounded" : "")
+                    }
+                    title={editable ? "Double-click to edit" : undefined}
+                  >
+                    {seg.text ?? <em className="text-muted-foreground">(no text)</em>}
+                  </p>
+                  <button
+                    className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100"
+                    onClick={() => playSegment(seg)}
+                    title="Play this segment (.)"
+                  >
+                    ▶
+                  </button>
+                </>
               )}
             </div>
           );
@@ -394,18 +580,24 @@ function SingleBlock({
   );
 }
 
-/* ---------------- OverlapBlock — side-by-side columns ---------------- */
+/* ---------------- OverlapBlock ---------------- */
 
 function OverlapBlock({
   block,
   byPid,
   gmPid,
+  activeSegmentId,
+  segmentRefs,
   seekTo,
+  playSegment,
 }: {
   block: Extract<Block, { type: "overlap" }>;
   byPid: Record<string, SpeakerMeta>;
   gmPid: string;
+  activeSegmentId: string | null;
+  segmentRefs: React.RefObject<Record<string, HTMLDivElement | null>>;
   seekTo: (ms: number) => void;
+  playSegment: (seg: Segment) => void;
 }) {
   const groups = new Map<string, Segment[]>();
   for (const s of block.segments) {
@@ -438,20 +630,39 @@ function OverlapBlock({
           </button>
         </div>
         <div className="space-y-1.5">
-          {segs.map((seg) => (
-            <div key={seg.id} className="flex gap-2">
-              <button
-                className="mt-1.5 h-2 w-2 shrink-0 rounded-full opacity-60"
-                style={{ backgroundColor: confDot(seg.confidence) }}
-                onClick={() => seekTo(seg.start_ms)}
-              />
-              <p className="flex-1 text-sm leading-relaxed">
-                {seg.text ?? (
-                  <em className="text-muted-foreground">(no text)</em>
-                )}
-              </p>
-            </div>
-          ))}
+          {segs.map((seg) => {
+            const isActive = activeSegmentId === seg.id;
+            return (
+              <div
+                key={seg.id}
+                ref={(el) => {
+                  segmentRefs.current[seg.id] = el;
+                }}
+                className={
+                  "group relative flex gap-2 rounded px-1 transition-colors " +
+                  (isActive ? "bg-accent/60" : "")
+                }
+              >
+                <button
+                  className="mt-1.5 h-2 w-2 shrink-0 rounded-full opacity-60"
+                  style={{ backgroundColor: confDot(seg.confidence) }}
+                  onClick={() => seekTo(seg.start_ms)}
+                />
+                <p className="flex-1 text-sm leading-relaxed">
+                  {seg.text ?? (
+                    <em className="text-muted-foreground">(no text)</em>
+                  )}
+                </p>
+                <button
+                  className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100"
+                  onClick={() => playSegment(seg)}
+                  title="Play this segment (.)"
+                >
+                  ▶
+                </button>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
