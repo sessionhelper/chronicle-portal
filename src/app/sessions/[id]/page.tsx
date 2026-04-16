@@ -6,8 +6,8 @@ import { RerunButton } from "@/components/admin/rerun-button";
 import { AppShell } from "@/components/app-shell";
 import { DownloadBar } from "@/components/download-bar";
 import { LocalDate } from "@/components/local-date";
-import { SegmentList } from "@/components/segment-list";
 import { SessionLiveBadge } from "@/components/session-live-badge";
+import { TranscriptViewer } from "@/components/transcript-viewer";
 import {
   Card,
   CardContent,
@@ -75,20 +75,6 @@ export default async function SessionDetailPage({ params }: Props) {
 
       <Card className="mb-6">
         <CardHeader>
-          <CardTitle>Audio</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <audio
-            controls
-            className="w-full"
-            src={`/api/sessions/${session.id}/audio/mixed/stream`}
-            preload="metadata"
-          />
-        </CardContent>
-      </Card>
-
-      <Card className="mb-6">
-        <CardHeader>
           <CardTitle>Downloads</CardTitle>
         </CardHeader>
         <CardContent>
@@ -104,10 +90,12 @@ export default async function SessionDetailPage({ params }: Props) {
       </Card>
 
       <h2 className="mb-3 text-xl font-semibold">Transcript</h2>
-      <SegmentList
-        segments={segments}
-        participants={participants}
-        canEdit={canEdit}
+      <TranscriptViewer
+        sessionId={session.id}
+        initialSegments={segments}
+        initialParticipants={participants}
+        audioSrc={`/api/sessions/${session.id}/audio/mixed/stream`}
+        canEdit={(seg) => canEdit[seg.id] ?? false}
       />
 
       {user.is_admin && participants.length > 0 && (
