@@ -2,11 +2,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { LocalDate } from "@/components/local-date";
 import { SessionLiveBadge } from "@/components/session-live-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchVisibleSessions } from "@/lib/page-data";
 import { AuthError, requireUser } from "@/lib/server-auth";
-import { formatDate } from "@/lib/utils";
 
 export default async function SessionsPage() {
   let user;
@@ -40,14 +40,14 @@ export default async function SessionsPage() {
                 <CardContent className="flex items-center justify-between py-4">
                   <div>
                     <div className="font-medium">
-                      {session.campaign_name ||
-                        session.title ||
-                        formatDate(session.started_at)}
+                      {session.campaign_name || session.title || (
+                        <LocalDate iso={session.started_at} />
+                      )}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      {formatDate(session.started_at)} •{" "}
-                      {session.participant_count} participants •{" "}
-                      {session.segment_count} segments
+                      <LocalDate iso={session.started_at} /> •{" "}
+                      {session.participant_count ?? 0} participants •{" "}
+                      {session.segment_count ?? 0} segments
                     </div>
                   </div>
                   <SessionLiveBadge

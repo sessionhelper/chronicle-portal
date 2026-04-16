@@ -2,10 +2,10 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
+import { LocalDate } from "@/components/local-date";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchVisibleSessions } from "@/lib/page-data";
-import { formatDate } from "@/lib/utils";
 import { AuthError, requireUser } from "@/lib/server-auth";
 
 export default async function DashboardPage() {
@@ -50,12 +50,14 @@ export default async function DashboardPage() {
                   href={`/sessions/${latest.id}`}
                   className="text-lg font-medium hover:underline"
                 >
-                  {latest.campaign_name || latest.title || formatDate(latest.started_at)}
+                  {latest.campaign_name || latest.title || (
+                    <LocalDate iso={latest.started_at} />
+                  )}
                 </Link>
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary">{latest.status}</Badge>
                   <span className="text-sm text-muted-foreground">
-                    {formatDate(latest.started_at)}
+                    <LocalDate iso={latest.started_at} />
                   </span>
                 </div>
               </div>

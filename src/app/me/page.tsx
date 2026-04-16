@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/app-shell";
+import { LocalDate } from "@/components/local-date";
 import { ConsentForm } from "@/components/me/consent-form";
 import { DeleteMyAudioButton } from "@/components/me/delete-my-audio";
 import { LicenseSwitches } from "@/components/me/license-switches";
@@ -11,7 +12,6 @@ import {
 import { dataApiClient } from "@/lib/data-api-client";
 import { fetchVisibleSessions } from "@/lib/page-data";
 import { requireUser } from "@/lib/server-auth";
-import { formatDate } from "@/lib/utils";
 
 export default async function MePage() {
   const user = await requireUser();
@@ -51,9 +51,9 @@ export default async function MePage() {
             <Card key={session.id}>
               <CardHeader>
                 <CardTitle>
-                  {session.campaign_name ||
-                    session.title ||
-                    formatDate(session.started_at)}
+                  {session.campaign_name || session.title || (
+                    <LocalDate iso={session.started_at} />
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">

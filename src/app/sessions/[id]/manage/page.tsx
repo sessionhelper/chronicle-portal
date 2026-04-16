@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { AppShell } from "@/components/app-shell";
 import { RerunButton } from "@/components/admin/rerun-button";
+import { LocalDate } from "@/components/local-date";
 import { SessionLiveBadge } from "@/components/session-live-badge";
 import {
   Card,
@@ -12,7 +13,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { fetchSessionDetail } from "@/lib/page-data";
 import { AuthError, resolveSessionRole } from "@/lib/server-auth";
-import { formatDate, formatDuration } from "@/lib/utils";
+import { formatDuration } from "@/lib/utils";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -45,10 +46,13 @@ export default async function ManageSessionPage({ params }: Props) {
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">
-            Manage: {session.campaign_name || session.title || formatDate(session.started_at)}
+            Manage:{" "}
+            {session.campaign_name || session.title || (
+              <LocalDate iso={session.started_at} />
+            )}
           </h1>
           <p className="text-sm text-muted-foreground">
-            {formatDate(session.started_at)}
+            <LocalDate iso={session.started_at} />
             {summary.duration_ms
               ? ` • ${formatDuration(summary.duration_ms / 1000)}`
               : ""}

@@ -5,6 +5,7 @@ import { MuteRanges } from "@/components/admin/mute-ranges";
 import { RerunButton } from "@/components/admin/rerun-button";
 import { AppShell } from "@/components/app-shell";
 import { DownloadBar } from "@/components/download-bar";
+import { LocalDate } from "@/components/local-date";
 import { SegmentList } from "@/components/segment-list";
 import { SessionLiveBadge } from "@/components/session-live-badge";
 import {
@@ -47,10 +48,12 @@ export default async function SessionDetailPage({ params }: Props) {
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">
-            {session.campaign_name || session.title || formatDate(session.started_at)}
+            {session.campaign_name || session.title || (
+              <LocalDate iso={session.started_at} />
+            )}
           </h1>
           <p className="text-sm text-muted-foreground">
-            {formatDate(session.started_at)} • {participants.length} participants
+            <LocalDate iso={session.started_at} /> • {participants.length} participants
             {summary.duration_ms
               ? ` • ${formatDuration(summary.duration_ms / 1000)}`
               : ""}
