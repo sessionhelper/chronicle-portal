@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { MuteRanges } from "@/components/admin/mute-ranges";
 import { RerunButton } from "@/components/admin/rerun-button";
 import { AppShell } from "@/components/app-shell";
+import { DownloadBar } from "@/components/download-bar";
 import { SegmentList } from "@/components/segment-list";
 import { SessionLiveBadge } from "@/components/session-live-badge";
 import {
@@ -70,6 +71,22 @@ export default async function SessionDetailPage({ params }: Props) {
             className="w-full"
             src={`/api/sessions/${session.id}/audio/mixed/stream`}
             preload="metadata"
+          />
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Downloads</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DownloadBar
+            sessionId={session.id}
+            sessionName={session.campaign_name || session.title || formatDate(session.started_at)}
+            segments={segments}
+            participants={participants}
+            userPseudoId={user.pseudo_id}
+            isAdmin={user.is_admin}
           />
         </CardContent>
       </Card>
