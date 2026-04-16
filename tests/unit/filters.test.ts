@@ -28,6 +28,8 @@ const mkSegment = (id: string, owner: string, extra?: Partial<Segment>): Segment
   id,
   session_id: "s1",
   pseudo_id: owner,
+  start_ms: 0,
+  end_ms: 1000,
   text: `text-${id}`,
   author_service: "pipeline",
   author_user_pseudo_id: owner,
