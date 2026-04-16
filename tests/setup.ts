@@ -2,9 +2,13 @@
  * Vitest setup — stubs for Next-specific modules that aren't resolvable
  * outside the Next.js build. We never exercise the OAuth flow in unit
  * tests; only the BFF handlers, schemas, and filters.
+ *
+ * Also registers @testing-library/jest-dom matchers so component tests
+ * get `.toBeInTheDocument()`, `.toHaveTextContent()`, etc.
  */
 
 import { vi } from "vitest";
+import "@testing-library/jest-dom/vitest";
 
 vi.mock("@/lib/auth", () => ({
   auth: vi.fn(async () => null),
